@@ -459,6 +459,10 @@ class PomodoroApp:
         self._render()
 
     def reset(self):
+        """Restarts the focus session. During a break, ends the break and starts over from focus."""
+        if self.phase == "break":
+            self.phase = "work"
+            self.duration = WORK_MINUTES * 60
         self.end_time = None
         self.remaining = float(self.duration)
         self._render()
