@@ -80,11 +80,18 @@ The dots show progress through a set of four focus sessions; the line below them
 
 ## Development
 
-Requires Python 3.10+ on Windows. Everything runs from a virtual environment inside the project, no Anaconda needed:
+Requires Python 3.10+ on Windows. Use either a virtual environment inside the project:
 
 ```powershell
 python -m venv .venv
 .venv\Scripts\Activate.ps1
+pip install -e ".[dev]"
+```
+
+or, with Anaconda, any conda environment:
+
+```powershell
+conda activate <env>
 pip install -e ".[dev]"
 ```
 
@@ -123,6 +130,8 @@ The timer takes its clock as a parameter, so its behavior is tested with a fake 
 
 ## Building
 
+With the environment from [Development](#development) activated:
+
 ```powershell
 pip install -e ".[build]"
 .\scripts\build.ps1
@@ -133,7 +142,7 @@ This writes two files to `dist\`:
 - `Pomodoro.exe`: the app on its own, runnable from anywhere
 - `PomodoroSetup.exe`: the installer, with the app inside
 
-The script uses `.venv` by default; pass `-Python <path\to\python.exe>` to use another interpreter. With a conda interpreter it also bundles conda's Tcl/Tk DLLs, which PyInstaller misses on its own (the exe would otherwise fail with `DLL load failed while importing _tkinter`).
+The script prints the Python it uses, picked in this order: `-Python <path\to\python.exe>` if given, the activated venv, the activated conda environment, the project's `.venv`, then `python` on PATH. It stops with a clear message if PyInstaller isn't installed there. With a conda interpreter it also bundles conda's Tcl/Tk DLLs, which PyInstaller misses on its own (the exe would otherwise fail with `DLL load failed while importing _tkinter`).
 
 CI builds both files on every push and keeps them as the `pomodoro-windows` artifact.
 

@@ -3,24 +3,55 @@
     Builds dist\Pomodoro.exe and the installer dist\PomodoroSetup.exe with PyInstaller.
 
 .DESCRIPTION
-    Uses the project's .venv by default; pass -Python to use another interpreter.
+    Picks the Python interpreter in this order:
+      1. -Python, if given
+      2. the activated virtual environment ($env:VIRTUAL_ENV)
+      3. the activated conda environment ($env:CONDA_PREFIX)
+      4. the project's .venv
+      5. python on PATH
     Conda environments keep the Tcl/Tk DLLs in Library\bin, which PyInstaller doesn't
     pick up on its own, so they are added explicitly when present.
+
+.EXAMPLE
+    .\scripts\build.ps1
+.EXAMPLE
+    .\scripts\build.ps1 -Python C:\path\to\python.exe
 #>
 param(
-    [string]$Python = (Join-Path $PSScriptRoot "..\.venv\Scripts\python.exe")
+    [string]$Python
 )
 
 # No $ErrorActionPreference = "Stop": PowerShell 5.1 would treat PyInstaller's stderr
 # logging as a failure. Exit codes are checked explicitly instead.
 $root = Resolve-Path (Join-Path $PSScriptRoot "..")
 
-if (-not (Test-Path $Python)) {
-    throw "Python not found at '$Python'. Create the venv first (see README) or pass -Python."
+function Find-Python {
+    $candidates = @()
+    if ($env:VIRTUAL_ENV) { $candidates += Join-Path $env:VIRTUAL_ENV "Scripts\python.exe" }
+    if ($env:CONDA_PREFIX) { $candidates += Join-Path $env:CONDA_PREFIX "python.exe" }
+    $candidates += Join-Path $root ".venv\Scripts\python.exe"
+    foreach ($candidate in $candidates) {
+        if (Test-Path $candidate) { return $candidate }
+    }
+    $onPath = Get-Command python -ErrorAction SilentlyContinue
+    if ($onPath) { return $onPath.Source }
+    return $null
+}
+
+if (-not $Python) { $Python = Find-Python }
+if (-not $Python -or -not (Test-Path $Python)) {
+    throw "No Python found. Activate an environment with the project installed (pip install -e "".[build]""), or pass -Python."
+}
+$Python = (Resolve-Path $Python).Path
+Write-Host "Using Python: $Python"
+
+& $Python -c "import PyInstaller, pomodoro" 2>$null
+if ($LASTEXITCODE -ne 0) {
+    throw "PyInstaller or the pomodoro package is missing from '$Python'. Run: pip install -e "".[build]"""
 }
 
 $extra = @()
-$condaBin = Join-Path (Split-Path (Resolve-Path $Python)) "Library\bin"
+$condaBin = Join-Path (Split-Path $Python) "Library\bin"
 if (Test-Path (Join-Path $condaBin "tk86t.dll")) {
     $env:PATH = "$condaBin;$env:PATH"
     $extra += "--add-binary", "$condaBin\tcl86t.dll;.", "--add-binary", "$condaBin\tk86t.dll;."
