@@ -3,7 +3,7 @@
 import pytest
 
 from pomodoro import render
-from pomodoro.theme import PALETTES, WINDOW_HEIGHT, WINDOW_WIDTH
+from pomodoro.theme import PALETTES, PHASE_SWITCH_HEIGHT, PHASE_SWITCH_WIDTH, WINDOW_HEIGHT, WINDOW_WIDTH
 from pomodoro.timer import Phase
 
 SCALES = [1.0, 1.5]
@@ -37,6 +37,16 @@ def test_button_renders(kind: render.ButtonKind, primary: bool, hover: bool) -> 
 @pytest.mark.parametrize("on", [True, False])
 def test_toggle_renders(on: bool) -> None:
     assert render.render_toggle(1.0, on, COLORS).size == (38, 22)
+
+
+@pytest.mark.parametrize("scale", SCALES)
+@pytest.mark.parametrize(("active", "hover"), [(0, None), (1, None), (0, 1), (1, 1)])
+def test_phase_switch_renders(scale: float, active: int, hover: int | None) -> None:
+    img = render.render_phase_switch(scale, active, hover, COLORS)
+    assert img.size == (round(PHASE_SWITCH_WIDTH * scale), round(PHASE_SWITCH_HEIGHT * scale))
+    # The highlighted segment is opaque in its middle
+    w, h = img.size
+    assert img.getpixel((w // 4 + active * w // 2, h // 2))[3] == 255  # type: ignore[index]
 
 
 @pytest.mark.parametrize("filled", [True, False])

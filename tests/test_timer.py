@@ -134,6 +134,34 @@ def test_reset_during_break_returns_to_work(timer: PomodoroTimer) -> None:
     assert timer.remaining == WORK
 
 
+def test_select_break_loads_full_break_paused(timer: PomodoroTimer, clock: FakeClock) -> None:
+    timer.start()
+    clock.advance(10)
+    timer.select_phase(Phase.BREAK)
+    assert timer.phase is Phase.BREAK
+    assert not timer.running
+    assert timer.is_fresh
+    assert timer.remaining == BREAK
+    assert timer.sessions_done == 0
+
+
+def test_select_current_phase_keeps_progress(timer: PomodoroTimer, clock: FakeClock) -> None:
+    timer.start()
+    clock.advance(10)
+    timer.select_phase(Phase.WORK)
+    assert timer.running
+    assert timer.remaining == pytest.approx(WORK - 10)
+
+
+def test_selected_break_runs_into_focus(timer: PomodoroTimer, clock: FakeClock) -> None:
+    timer.select_phase(Phase.BREAK)
+    timer.start()
+    clock.advance(BREAK)
+    assert timer.update() is True
+    assert timer.phase is Phase.WORK
+    assert timer.sessions_done == 0
+
+
 def test_update_is_idle_while_paused(timer: PomodoroTimer, clock: FakeClock) -> None:
     clock.advance(WORK * 10)
     assert timer.update() is False

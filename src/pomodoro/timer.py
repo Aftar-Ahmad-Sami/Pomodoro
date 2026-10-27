@@ -101,6 +101,11 @@ class PomodoroTimer:
         """Moves to the next phase without counting the current one as completed."""
         self._enter(self.phase.other, run=False)
 
+    def select_phase(self, phase: Phase) -> None:
+        """Loads ``phase`` from its start, paused. Selecting the current phase changes nothing."""
+        if phase is not self.phase:
+            self._enter(phase, run=False)
+
     def update(self) -> bool:
         """Advances the timer. Returns True if a phase just ran to completion."""
         if not self.running or self.remaining > 0:

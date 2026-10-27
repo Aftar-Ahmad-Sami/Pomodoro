@@ -24,11 +24,13 @@ from pomodoro.theme import (
     CONTROLS_Y,
     DOT_SPACING,
     DOTS_Y,
-    FAINT,
     FG,
     MUTED,
     OPTIONS_Y,
     PALETTES,
+    PHASE_SWITCH_PAD,
+    PHASE_SWITCH_WIDTH,
+    PHASE_SWITCH_Y,
     RING_CENTER,
     WINDOW_HEIGHT,
     WINDOW_WIDTH,
@@ -42,6 +44,9 @@ POP_TOPMOST_MS = 1500  # how long the window stays on top after a phase change
 
 ButtonName = Literal["reset", "toggle", "skip"]
 
+PHASE_LABELS = {Phase.WORK: "Focus", Phase.BREAK: "Break"}
+PHASE_ORDER = (Phase.WORK, Phase.BREAK)  # left to right in the switch
+
 
 class PomodoroApp:
     def __init__(self, root: tk.Tk, timer: PomodoroTimer, notifier: Notifier) -> None:
@@ -52,6 +57,7 @@ class PomodoroApp:
 
         self.always_on_top = False
         self.hover: ButtonName | None = None
+        self.switch_hover: Phase | None = None
         self._images: dict[Hashable, ImageTk.PhotoImage] = {}
         self._ring_key: tuple[Phase, int] | None = None
         self._ring_img: ImageTk.PhotoImage | None = None
@@ -120,17 +126,25 @@ class PomodoroApp:
         except OSError:
             log.debug("Logo unavailable", exc_info=True)
         c.create_text(px(60), px(36), text="Pomodoro", font=(semibold, 11), fill=FG, anchor="w")
-        c.create_text(
-            px(WINDOW_WIDTH - 28),
-            px(36),
-            text=f"{WORK_MINUTES} / {BREAK_MINUTES}",
-            font=(text, 10),
-            fill=FAINT,
-            anchor="e",
-        )
+
+        # Focus / Break switch
+        cx, cy = RING_CENTER
+        self.switch_item = c.create_image(px(cx), px(PHASE_SWITCH_Y))
+        c.tag_bind(self.switch_item, "<Motion>", lambda e: self._set_switch_hover(self._switch_phase_at(e.x)))
+        c.tag_bind(self.switch_item, "<Leave>", lambda e: self._set_switch_hover(None))
+        c.tag_bind(self.switch_item, "<Button-1>", lambda e: self.select_phase(self._switch_phase_at(e.x)))
+        segment_offset = (PHASE_SWITCH_WIDTH / 2 - PHASE_SWITCH_PAD) / 2
+        self.switch_labels: dict[Phase, int] = {}
+        for phase, x, minutes in (
+            (Phase.WORK, cx - segment_offset, WORK_MINUTES),
+            (Phase.BREAK, cx + segment_offset, BREAK_MINUTES),
+        ):
+            label = PHASE_LABELS[phase]
+            item = c.create_text(px(x), px(PHASE_SWITCH_Y), text=f"{label} · {minutes}m", font=(semibold, 9))
+            self.switch_labels[phase] = item
+            self._bind_switch_label(item, phase)
 
         # Ring and its text
-        cx, cy = RING_CENTER
         self.ring_item = c.create_image(px(cx), px(cy))
         self.phase_text = c.create_text(px(cx), px(cy - 52), font=(semibold, 10))
         self.time_text = c.create_text(px(cx), px(cy + 2), font=(display, 46), fill=FG)
@@ -163,12 +177,24 @@ class PomodoroApp:
         self.root.bind("<space>", lambda e: self.toggle())
         self.root.bind("r", lambda e: self.reset())
         self.root.bind("s", lambda e: self.skip())
+        self.root.bind("f", lambda e: self.select_phase(Phase.WORK))
+        self.root.bind("b", lambda e: self.select_phase(Phase.BREAK))
 
     def _bind_button(self, item: int, name: ButtonName, action: Callable[[], None]) -> None:
         c = self.canvas
         c.tag_bind(item, "<Enter>", lambda e: self._set_hover(name))
         c.tag_bind(item, "<Leave>", lambda e: self._set_hover(None))
         c.tag_bind(item, "<Button-1>", lambda e: action())
+
+    def _bind_switch_label(self, item: int, phase: Phase) -> None:
+        c = self.canvas
+        c.tag_bind(item, "<Enter>", lambda e: self._set_switch_hover(phase))
+        c.tag_bind(item, "<Leave>", lambda e: self._set_switch_hover(None))
+        c.tag_bind(item, "<Button-1>", lambda e: self.select_phase(phase))
+
+    def _switch_phase_at(self, x: int) -> Phase:
+        """The switch segment under canvas x coordinate ``x``."""
+        return Phase.WORK if x < self.px(RING_CENTER[0]) else Phase.BREAK
 
     def _bind_option(self, item: int, option: str) -> None:
         c = self.canvas
@@ -197,7 +223,7 @@ class PomodoroApp:
             c.itemconfig(self.ring_item, image=self._ring_img)
 
         clock = format_clock(timer.remaining_whole_seconds)
-        label = "Focus" if phase is Phase.WORK else "Break"
+        label = PHASE_LABELS[phase]
         if timer.running:
             sub = "until break" if phase is Phase.WORK else "until focus"
         elif timer.is_fresh:
@@ -234,6 +260,20 @@ class PomodoroApp:
             img = self._cached(("toggle", on, phase), functools.partial(render.render_toggle, scale, on, colors))
             self.canvas.itemconfig(item, image=img)
 
+        active = PHASE_ORDER.index(phase)
+        hovered = PHASE_ORDER.index(self.switch_hover) if self.switch_hover else None
+        img = self._cached(
+            ("switch", phase, hovered), functools.partial(render.render_phase_switch, scale, active, hovered, colors)
+        )
+        self.canvas.itemconfig(self.switch_item, image=img)
+        for label_phase, item in self.switch_labels.items():
+            self.canvas.itemconfig(item, fill=self._switch_label_color(label_phase))
+
+    def _switch_label_color(self, label_phase: Phase) -> str:
+        if label_phase is self.timer.phase:
+            return "#ffffff"  # on the gradient
+        return FG if label_phase is self.switch_hover else MUTED
+
     def _button_kind(self, name: ButtonName) -> render.ButtonKind:
         if name == "reset":
             return "reset"
@@ -246,6 +286,13 @@ class PomodoroApp:
     def _set_hover(self, name: ButtonName | None) -> None:
         self.hover = name
         self.canvas.config(cursor="hand2" if name else "")
+        self._render_controls()
+
+    def _set_switch_hover(self, phase: Phase | None) -> None:
+        if phase is self.switch_hover:
+            return  # <Motion> fires constantly; only redraw when the segment changes
+        self.switch_hover = phase
+        self.canvas.config(cursor="hand2" if phase else "")
         self._render_controls()
 
     def _option(self, name: str) -> bool:
@@ -269,6 +316,10 @@ class PomodoroApp:
 
     def skip(self) -> None:
         self.timer.skip()
+        self._render()
+
+    def select_phase(self, phase: Phase) -> None:
+        self.timer.select_phase(phase)
         self._render()
 
     def _tick(self) -> None:

@@ -17,6 +17,7 @@ A Windows desktop timer for the **52/17 productivity rule**: 52 minutes of focus
 ## Features
 
 - Glowing progress ring with a coral theme for focus and a mint theme for breaks
+- Focus / Break switch to jump straight to either phase, e.g. for a 17 minute break on its own
 - Start/Pause, Reset and Skip controls, with keyboard shortcuts
 - Windows notification, a chime and the window popping to the front when a phase ends
 - Auto-start of the next phase and "always on top" toggles
@@ -56,13 +57,14 @@ Both exit with code 0 on success and 1 on failure.
 
 ## Usage
 
-Press **Space** (or the round button) to start. When a phase ends, Pomodoro chimes, shows a notification and comes to the front; with **Auto-start** on, the next phase starts by itself.
+Press **Space** (or the round button) to start. To run a break on its own, click **Break · 17m** at the top (or press `B`), then start it. When a phase ends, Pomodoro chimes, shows a notification and comes to the front; with **Auto-start** on, the next phase starts by itself.
 
 | Key | Action |
 | --- | --- |
 | `Space` | Start / pause |
 | `R` | Reset: restart the focus session (during a break, go back to focus) |
 | `S` | Skip to the next phase. A skipped focus session isn't counted |
+| `F` / `B` | Switch to focus / break, paused at the start of that phase. Does nothing if already in it |
 
 The dots show progress through a set of four focus sessions; the line below them shows the total time focused since the app was opened.
 

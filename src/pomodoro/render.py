@@ -12,6 +12,9 @@ from PIL import Image, ImageDraw, ImageFilter
 from pomodoro.theme import (
     BG_BOTTOM,
     BG_TOP,
+    PHASE_SWITCH_HEIGHT,
+    PHASE_SWITCH_PAD,
+    PHASE_SWITCH_WIDTH,
     RGB,
     RING_CENTER,
     RING_RADIUS,
@@ -173,6 +176,37 @@ def render_toggle(scale: float, on: bool, colors: Palette) -> Image.Image:
     kx = bw - m - kd if on else m
     d.ellipse((kx, m, kx + kd, m + kd), fill=(255, 255, 255, 255) if on else (190, 190, 206, 255))
     return img.resize((round(w * scale), round(h * scale)), LANCZOS)
+
+
+def render_phase_switch(scale: float, active: int, hover: int | None, colors: Palette) -> Image.Image:
+    """Two-segment pill; segment ``active`` (0 or 1) is filled with the phase gradient.
+
+    The labels are canvas text drawn on top, so they match the rest of the UI's fonts.
+    """
+    w, h = round(PHASE_SWITCH_WIDTH * scale * SS), round(PHASE_SWITCH_HEIGHT * scale * SS)
+    pad = PHASE_SWITCH_PAD * scale * SS
+    seg_w = (w - 2 * pad) / 2
+    img = Image.new("RGBA", (w, h), (0, 0, 0, 0))
+    d = ImageDraw.Draw(img)
+    d.rounded_rectangle(
+        (0, 0, w - 1, h - 1),
+        radius=h / 2,
+        fill=(255, 255, 255, 14),
+        outline=(255, 255, 255, 26),
+        width=round(scale * SS),
+    )
+
+    def segment(i: int) -> tuple[float, float, float, float]:
+        x0 = pad + i * seg_w
+        return x0, pad, x0 + seg_w, h - pad
+
+    if hover is not None and hover != active:
+        d.rounded_rectangle(segment(hover), radius=(h - 2 * pad) / 2, fill=(255, 255, 255, 18))
+
+    mask = Image.new("L", (w, h), 0)
+    ImageDraw.Draw(mask).rounded_rectangle(segment(active), radius=(h - 2 * pad) / 2, fill=255)
+    img.paste(diagonal_gradient(w, h, *colors), (0, 0), mask)
+    return img.resize((round(PHASE_SWITCH_WIDTH * scale), round(PHASE_SWITCH_HEIGHT * scale)), LANCZOS)
 
 
 def render_dot(scale: float, filled: bool, color: RGB) -> Image.Image:

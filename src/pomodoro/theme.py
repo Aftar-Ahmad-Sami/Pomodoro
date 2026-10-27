@@ -18,6 +18,11 @@ PALETTES: dict[Phase, Palette] = {
 
 WINDOW_WIDTH, WINDOW_HEIGHT = 380, 640
 
+PHASE_SWITCH_Y = 84
+PHASE_SWITCH_WIDTH = 220
+PHASE_SWITCH_HEIGHT = 32
+PHASE_SWITCH_PAD = 3  # gap between the track and the highlighted segment
+
 RING_CENTER = (190, 252)
 RING_RADIUS = 118
 RING_STROKE = 12
