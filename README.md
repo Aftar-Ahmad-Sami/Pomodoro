@@ -145,4 +145,4 @@ Rebuild and rerun setup afterwards to update the installed app.
 
 ## License
 
-[Apache 2.0](LICENSE)
+Copyright 2026 Aftar Ahmad Sami. Licensed under the [Apache License 2.0](LICENSE).
