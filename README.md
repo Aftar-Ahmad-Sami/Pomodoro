@@ -17,8 +17,9 @@ A Windows desktop timer for the **52/17 productivity rule**: 52 minutes of focus
 ## Features
 
 - Glowing progress ring with a coral theme for focus and a mint theme for breaks
-- Focus / Break switch to jump straight to either phase, e.g. for a 17 minute break on its own
-- Start/Pause, Reset and Skip controls, with keyboard shortcuts
+- Focus / Break / Free switch to jump straight to any phase, e.g. for a 17 minute break on its own
+- Time bank: finish focus early and the leftover minutes become guilt-free free time, which earns interest until you spend it
+- Start/Pause, Reset and Skip controls, with keyboard shortcuts; hover over a button to see what it does and its shortcut
 - Windows notification, a chime and the window popping to the front when a phase ends
 - Auto-start of the next phase and "always on top" toggles
 - Session dots and total focused time
@@ -40,11 +41,11 @@ Setup installs for the current user only:
 | App and uninstaller | `%LOCALAPPDATA%\Programs\Pomodoro` |
 | Shortcuts | Start menu, and the Desktop if selected |
 | Uninstall entry | **Settings → Apps → Installed apps** |
-| App data (notification icon) | `%LOCALAPPDATA%\Pomodoro` |
+| App data (time bank, settings, notification icon) | `%LOCALAPPDATA%\Pomodoro` |
 
 Running setup again upgrades an existing install in place.
 
-**Uninstall** from **Settings → Apps → Installed apps → Pomodoro → Uninstall**. This removes everything in the table above.
+**Uninstall** from **Settings → Apps → Installed apps → Pomodoro → Uninstall**. This removes everything in the table above, including your banked time. Upgrading by running setup again keeps it.
 
 **Scripted install** (for example, when deploying to several machines):
 
@@ -62,11 +63,23 @@ Press **Space** (or the round button) to start. To run a break on its own, click
 | Key | Action |
 | --- | --- |
 | `Space` | Start / pause |
-| `R` | Reset: restart the focus session (during a break, go back to focus) |
-| `S` | Skip to the next phase. A skipped focus session isn't counted |
-| `F` / `B` | Switch to focus / break, paused at the start of that phase. Does nothing if already in it |
+| `R` | Reset: restart the focus session (from a break or free time, go back to focus) |
+| `S` | Skip to the next phase. After 25+ minutes of focus, this finishes the session early and banks the time left (see below) |
+| `F` / `B` / `T` | Switch to focus / break / free time, paused at the start. Does nothing if already there |
+| `E` | During a break, extend it by 5 minutes from the time bank |
 
 The dots show progress through a set of four focus sessions; the line below them shows the total time focused since the app was opened.
+
+### Time bank
+
+Finish early, keep the time. If you're done with your work before the 52 minutes are up, press **Skip** (`S`): as long as you worked at least 25 minutes, the session counts and the minutes you didn't need go into your time bank as guilt-free free time. Skipping earlier than 25 minutes banks nothing, so quitting at minute 5 can't earn 47 minutes.
+
+Spend it two ways:
+
+- **Free time:** pick **Free** in the switch (or press `T`) and start it. It counts down your balance; pause or switch away and whatever is left stays banked. When it runs out, Pomodoro moves to focus.
+- **Longer breaks:** during a break, click **+5m from bank** (or press `E`).
+
+Or invest it: unspent time earns **10% interest per day**, compounding, until the balance reaches 4 hours. Banked time never expires. The balance is saved in `%LOCALAPPDATA%\Pomodoro\state.json`, along with the Auto-start and Always on top settings.
 
 ## Troubleshooting
 
@@ -111,7 +124,9 @@ mypy                   # type check (strict)
 ```
 src/pomodoro/
   app.py         Tkinter window: layout, drawing and input handling
-  timer.py       Work/break state machine, independent of the UI
+  timer.py       Work/break/free state machine, independent of the UI
+  bank.py        Time bank: banked minutes and daily interest
+  storage.py     Saves the bank and settings between launches
   render.py      Pillow rendering of the ring, buttons, toggles and dots
   notify.py      Chime and Windows toast when a phase ends
   win32.py       Windows integration: DPI, title bar, taskbar identity, shortcuts
@@ -123,7 +138,7 @@ src/pomodoro/
 scripts/
   build.ps1      Builds Pomodoro.exe and PomodoroSetup.exe
   make_icon.py   Regenerates the icon files
-tests/           Timer, formatting, rendering, installer and Windows integration tests
+tests/           Timer, bank, storage, formatting, rendering, installer and Windows tests
 ```
 
 The timer takes its clock as a parameter, so its behavior is tested with a fake clock and no window. The installer tests install into a temporary folder and don't touch the registry.

@@ -7,13 +7,17 @@ def format_clock(seconds: int) -> str:
     return f"{mins:02d}:{secs:02d}"
 
 
-def format_focus_summary(sessions: int, work_minutes: int) -> str:
+def format_duration(seconds: float) -> str:
+    """Formats a span in whole minutes, e.g. ``45m`` or ``2h 05m``. Partial minutes round down."""
+    hours, mins = divmod(int(max(0.0, seconds)) // 60, 60)
+    return f"{hours}h {mins:02d}m" if hours else f"{mins}m"
+
+
+def format_focus_summary(sessions: int, focused_seconds: float) -> str:
     """Summarizes completed work sessions, e.g. ``3 sessions  ·  2h 36m focused``."""
     if sessions <= 0:
         return "No sessions yet"
-    hours, mins = divmod(sessions * work_minutes, 60)
-    focused = f"{hours}h {mins:02d}m" if hours else f"{mins}m"
-    return f"{sessions} session{'s' if sessions != 1 else ''}  ·  {focused} focused"
+    return f"{sessions} session{'s' if sessions != 1 else ''}  ·  {format_duration(focused_seconds)} focused"
 
 
 def filled_dots(sessions: int, per_set: int) -> int:

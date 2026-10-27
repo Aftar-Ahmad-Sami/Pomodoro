@@ -178,14 +178,14 @@ def render_toggle(scale: float, on: bool, colors: Palette) -> Image.Image:
     return img.resize((round(w * scale), round(h * scale)), LANCZOS)
 
 
-def render_phase_switch(scale: float, active: int, hover: int | None, colors: Palette) -> Image.Image:
-    """Two-segment pill; segment ``active`` (0 or 1) is filled with the phase gradient.
+def render_phase_switch(scale: float, segments: int, active: int, hover: int | None, colors: Palette) -> Image.Image:
+    """Pill split into ``segments`` equal parts; segment ``active`` is filled with the phase gradient.
 
     The labels are canvas text drawn on top, so they match the rest of the UI's fonts.
     """
     w, h = round(PHASE_SWITCH_WIDTH * scale * SS), round(PHASE_SWITCH_HEIGHT * scale * SS)
     pad = PHASE_SWITCH_PAD * scale * SS
-    seg_w = (w - 2 * pad) / 2
+    seg_w = (w - 2 * pad) / segments
     img = Image.new("RGBA", (w, h), (0, 0, 0, 0))
     d = ImageDraw.Draw(img)
     d.rounded_rectangle(

@@ -5,18 +5,33 @@ Graphics are rendered with Pillow (see :mod:`pomodoro.render`) and layered on a 
 
 from __future__ import annotations
 
+import datetime as dt
 import functools
 import logging
+import time
 import tkinter as tk
 from collections.abc import Callable, Hashable
+from pathlib import Path
 from tkinter import font as tkfont
 from typing import Literal
 
 from PIL import Image, ImageTk
 
-from pomodoro import render, win32
-from pomodoro.config import BREAK_MINUTES, ICON_ICO, ICON_PNG, SESSIONS_PER_SET, TICK_MS, WORK_MINUTES
-from pomodoro.formatting import filled_dots, format_clock, format_focus_summary
+from pomodoro import render, storage, win32
+from pomodoro.bank import TimeBank
+from pomodoro.config import (
+    BANK_DAILY_INTEREST,
+    BANK_EXTEND_MINUTES,
+    BANK_INTEREST_CAP_MINUTES,
+    BANK_MIN_WORK_MINUTES,
+    BREAK_MINUTES,
+    ICON_ICO,
+    ICON_PNG,
+    SESSIONS_PER_SET,
+    TICK_MS,
+    WORK_MINUTES,
+)
+from pomodoro.formatting import filled_dots, format_clock, format_duration, format_focus_summary
 from pomodoro.notify import Notifier
 from pomodoro.theme import (
     BG_TOP,
@@ -24,6 +39,7 @@ from pomodoro.theme import (
     CONTROLS_Y,
     DOT_SPACING,
     DOTS_Y,
+    FAINT,
     FG,
     MUTED,
     OPTIONS_Y,
@@ -32,6 +48,8 @@ from pomodoro.theme import (
     PHASE_SWITCH_WIDTH,
     PHASE_SWITCH_Y,
     RING_CENTER,
+    TOOLTIP_BG,
+    TOOLTIP_BORDER,
     WINDOW_HEIGHT,
     WINDOW_WIDTH,
     hex_color,
@@ -41,32 +59,83 @@ from pomodoro.timer import Phase, PomodoroTimer
 log = logging.getLogger(__name__)
 
 POP_TOPMOST_MS = 1500  # how long the window stays on top after a phase change
+FLASH_MS = 4000  # how long a status message replaces the text under the clock
+SAVE_INTERVAL_S = 30  # how often state is saved while the app runs, in case it is killed
 
 ButtonName = Literal["reset", "toggle", "skip"]
 
-PHASE_LABELS = {Phase.WORK: "Focus", Phase.BREAK: "Break"}
-PHASE_ORDER = (Phase.WORK, Phase.BREAK)  # left to right in the switch
+PHASE_LABELS = {Phase.WORK: "Focus", Phase.BREAK: "Break", Phase.FREE: "Free"}
+PHASE_ORDER = (Phase.WORK, Phase.BREAK, Phase.FREE)  # left to right in the switch
+RUNNING_TEXT = {Phase.WORK: "until break", Phase.BREAK: "until focus", Phase.FREE: "of free time left"}
+TOOLTIP_DELAY_MS = 400
+
+
+OptionName = Literal["auto_start", "always_on_top"]
+# Anything that shows a tooltip on hover: a round button, a switch segment, an option toggle or the extend link
+TooltipTarget = ButtonName | Phase | OptionName | Literal["extend"]
+
+
+def tooltip_text(target: TooltipTarget, timer: PomodoroTimer) -> str:
+    """Describes what clicking ``target`` does right now, with its keyboard shortcut if it has one."""
+    if target == "toggle":
+        return "Pause · Space" if timer.running else "Start · Space"
+    if target == "reset":
+        return "Restart focus · R"
+    if target == "skip":
+        if timer.can_finish_early:
+            return f"Finish early, bank {format_duration(timer.remaining)} · S"
+        return f"Skip to {PHASE_LABELS[timer.phase.next].lower()} · S"
+    if target is Phase.WORK:
+        return f"Switch to a {WORK_MINUTES} minute focus session · F"
+    if target is Phase.BREAK:
+        return f"Switch to a {BREAK_MINUTES} minute break · B"
+    if target is Phase.FREE:
+        if timer.bank.balance <= 0:
+            return f"Finish focus early (after {BANK_MIN_WORK_MINUTES}+ min) to bank free time"
+        return f"Spend your {format_duration(timer.bank.balance)} of banked free time · T"
+    if target == "auto_start":
+        return "Start the next phase by itself when one ends"
+    if target == "always_on_top":
+        return "Keep this window above other windows"
+    return f"Add {BANK_EXTEND_MINUTES}m from your bank ({format_duration(timer.bank.balance)} left) · E"
 
 
 class PomodoroApp:
-    def __init__(self, root: tk.Tk, timer: PomodoroTimer, notifier: Notifier) -> None:
+    def __init__(
+        self,
+        root: tk.Tk,
+        timer: PomodoroTimer,
+        notifier: Notifier,
+        *,
+        state_path: Path | None = None,
+        always_on_top: bool = False,
+    ) -> None:
         self.root = root
         self.timer = timer
         self.notifier = notifier
+        self.state_path = state_path
         self.scale = root.winfo_fpixels("1i") / 96
 
-        self.always_on_top = False
+        self.always_on_top = always_on_top
         self.hover: ButtonName | None = None
         self.switch_hover: Phase | None = None
+        self._flash_text: str | None = None
+        self._flash_job: str | None = None
+        self._last_save = time.monotonic()
         self._images: dict[Hashable, ImageTk.PhotoImage] = {}
         self._ring_key: tuple[Phase, int] | None = None
         self._ring_img: ImageTk.PhotoImage | None = None
         self._logo: ImageTk.PhotoImage | None = None
         self._bg_phase: Phase | None = None
+        self._tooltip_job: str | None = None
+        self._tooltip_target: TooltipTarget | None = None  # what the mouse is over
+        self._tooltip_text: str | None = None  # text of the visible tooltip, None when hidden
 
         self._setup_window()
         self._build_ui()
+        self._apply_topmost()
         self._render()
+        self.root.protocol("WM_DELETE_WINDOW", self._close)
         self.root.after(TICK_MS, self._tick)
 
     def px(self, v: float) -> float:
@@ -104,6 +173,7 @@ class PomodoroApp:
         display = pick("Segoe UI Variable Display Light", "Segoe UI Light")
         semibold = pick("Segoe UI Variable Text Semibold", "Segoe UI Semibold")
         text = pick("Segoe UI Variable Text", "Segoe UI")
+        self._tooltip_font = (text, 9)
 
         px = self.px
         c = self.canvas = tk.Canvas(
@@ -127,20 +197,15 @@ class PomodoroApp:
             log.debug("Logo unavailable", exc_info=True)
         c.create_text(px(60), px(36), text="Pomodoro", font=(semibold, 11), fill=FG, anchor="w")
 
-        # Focus / Break switch
+        # Focus / Break / Free switch
         cx, cy = RING_CENTER
         self.switch_item = c.create_image(px(cx), px(PHASE_SWITCH_Y))
         c.tag_bind(self.switch_item, "<Motion>", lambda e: self._set_switch_hover(self._switch_phase_at(e.x)))
         c.tag_bind(self.switch_item, "<Leave>", lambda e: self._set_switch_hover(None))
         c.tag_bind(self.switch_item, "<Button-1>", lambda e: self.select_phase(self._switch_phase_at(e.x)))
-        segment_offset = (PHASE_SWITCH_WIDTH / 2 - PHASE_SWITCH_PAD) / 2
         self.switch_labels: dict[Phase, int] = {}
-        for phase, x, minutes in (
-            (Phase.WORK, cx - segment_offset, WORK_MINUTES),
-            (Phase.BREAK, cx + segment_offset, BREAK_MINUTES),
-        ):
-            label = PHASE_LABELS[phase]
-            item = c.create_text(px(x), px(PHASE_SWITCH_Y), text=f"{label} · {minutes}m", font=(semibold, 9))
+        for i, phase in enumerate(PHASE_ORDER):
+            item = c.create_text(px(self._switch_segment_center(i)), px(PHASE_SWITCH_Y), font=(semibold, 9))
             self.switch_labels[phase] = item
             self._bind_switch_label(item, phase)
 
@@ -149,6 +214,12 @@ class PomodoroApp:
         self.phase_text = c.create_text(px(cx), px(cy - 52), font=(semibold, 10))
         self.time_text = c.create_text(px(cx), px(cy + 2), font=(display, 46), fill=FG)
         self.sub_text = c.create_text(px(cx), px(cy + 52), font=(text, 10), fill=MUTED)
+        self.extend_text = c.create_text(
+            px(cx), px(cy + 78), text=f"+{BANK_EXTEND_MINUTES}m from bank", font=(semibold, 9), state="hidden"
+        )
+        c.tag_bind(self.extend_text, "<Button-1>", lambda e: self.extend_break())
+        c.tag_bind(self.extend_text, "<Enter>", lambda e: self._hover_link("extend"))
+        c.tag_bind(self.extend_text, "<Leave>", lambda e: self._hover_link(None))
 
         # Session progress dots
         start = cx - DOT_SPACING * (SESSIONS_PER_SET - 1) / 2
@@ -166,8 +237,12 @@ class PomodoroApp:
             self._bind_button(item, name, actions[name])
 
         # Option toggles
-        self.toggles: dict[str, int] = {}
-        for option, label, x in (("auto_start", "Auto-start", 62), ("always_on_top", "Always on top", 200)):
+        self.toggles: dict[OptionName, int] = {}
+        options: tuple[tuple[OptionName, str, int], ...] = (
+            ("auto_start", "Auto-start", 62),
+            ("always_on_top", "Always on top", 200),
+        )
+        for option, label, x in options:
             sw = c.create_image(px(x), px(OPTIONS_Y), anchor="w")
             lbl = c.create_text(px(x + 46), px(OPTIONS_Y), text=label, font=(text, 10), fill=MUTED, anchor="w")
             self.toggles[option] = sw
@@ -179,12 +254,14 @@ class PomodoroApp:
         self.root.bind("s", lambda e: self.skip())
         self.root.bind("f", lambda e: self.select_phase(Phase.WORK))
         self.root.bind("b", lambda e: self.select_phase(Phase.BREAK))
+        self.root.bind("t", lambda e: self.select_phase(Phase.FREE))
+        self.root.bind("e", lambda e: self.extend_break())
 
     def _bind_button(self, item: int, name: ButtonName, action: Callable[[], None]) -> None:
         c = self.canvas
         c.tag_bind(item, "<Enter>", lambda e: self._set_hover(name))
         c.tag_bind(item, "<Leave>", lambda e: self._set_hover(None))
-        c.tag_bind(item, "<Button-1>", lambda e: action())
+        c.tag_bind(item, "<Button-1>", lambda e: self._click_button(action))
 
     def _bind_switch_label(self, item: int, phase: Phase) -> None:
         c = self.canvas
@@ -192,15 +269,22 @@ class PomodoroApp:
         c.tag_bind(item, "<Leave>", lambda e: self._set_switch_hover(None))
         c.tag_bind(item, "<Button-1>", lambda e: self.select_phase(phase))
 
+    @staticmethod
+    def _switch_segment_center(index: int) -> float:
+        segment = (PHASE_SWITCH_WIDTH - 2 * PHASE_SWITCH_PAD) / len(PHASE_ORDER)
+        return RING_CENTER[0] - PHASE_SWITCH_WIDTH / 2 + PHASE_SWITCH_PAD + segment * (index + 0.5)
+
     def _switch_phase_at(self, x: int) -> Phase:
         """The switch segment under canvas x coordinate ``x``."""
-        return Phase.WORK if x < self.px(RING_CENTER[0]) else Phase.BREAK
+        left = self.px(RING_CENTER[0] - PHASE_SWITCH_WIDTH / 2)
+        index = int((x - left) / self.px(PHASE_SWITCH_WIDTH) * len(PHASE_ORDER))
+        return PHASE_ORDER[min(len(PHASE_ORDER) - 1, max(0, index))]
 
-    def _bind_option(self, item: int, option: str) -> None:
+    def _bind_option(self, item: int, option: OptionName) -> None:
         c = self.canvas
-        c.tag_bind(item, "<Button-1>", lambda e: self._flip(option))
-        c.tag_bind(item, "<Enter>", lambda e: c.config(cursor="hand2"))
-        c.tag_bind(item, "<Leave>", lambda e: c.config(cursor=""))
+        c.tag_bind(item, "<Button-1>", lambda e: self._click_button(lambda: self._flip(option)))
+        c.tag_bind(item, "<Enter>", lambda e: self._hover_link(option))
+        c.tag_bind(item, "<Leave>", lambda e: self._hover_link(None))
 
     # ---------- Drawing ----------
 
@@ -224,26 +308,32 @@ class PomodoroApp:
 
         clock = format_clock(timer.remaining_whole_seconds)
         label = PHASE_LABELS[phase]
-        if timer.running:
-            sub = "until break" if phase is Phase.WORK else "until focus"
-        elif timer.is_fresh:
-            sub = "press space to start"
-        else:
-            sub = "paused"
-
         c.itemconfig(self.phase_text, text="  ".join(label.upper()), fill=hex_color(colors[0]))
         c.itemconfig(self.time_text, text=clock)
-        c.itemconfig(self.sub_text, text=sub)
+        c.itemconfig(self.sub_text, text=self._flash_text or self._status_text())
+        c.itemconfig(self.extend_text, state="normal" if self._can_extend() else "hidden", fill=hex_color(colors[0]))
 
         filled = filled_dots(timer.sessions_done, SESSIONS_PER_SET)
         for i, item in enumerate(self.dot_items):
             on = i < filled
             img = self._cached(("dot", on, phase), functools.partial(render.render_dot, scale, on, colors[0]))
             c.itemconfig(item, image=img)
-        c.itemconfig(self.sessions_text, text=format_focus_summary(timer.sessions_done, WORK_MINUTES))
+        c.itemconfig(self.sessions_text, text=format_focus_summary(timer.sessions_done, timer.focused_seconds))
 
         self._render_controls()
+        self._refresh_tooltip()
         self.root.title(f"{clock} · {label}")
+
+    def _status_text(self) -> str:
+        """The line under the clock."""
+        timer = self.timer
+        if timer.running:
+            if timer.can_finish_early:
+                return f"done? press S to bank {format_duration(timer.remaining)}"
+            return RUNNING_TEXT[timer.phase]
+        if timer.is_fresh:
+            return "press space to start"
+        return "paused"
 
     def _render_controls(self) -> None:
         scale, phase = self.scale, self.timer.phase
@@ -263,16 +353,35 @@ class PomodoroApp:
         active = PHASE_ORDER.index(phase)
         hovered = PHASE_ORDER.index(self.switch_hover) if self.switch_hover else None
         img = self._cached(
-            ("switch", phase, hovered), functools.partial(render.render_phase_switch, scale, active, hovered, colors)
+            ("switch", phase, hovered),
+            functools.partial(render.render_phase_switch, scale, len(PHASE_ORDER), active, hovered, colors),
         )
         self.canvas.itemconfig(self.switch_item, image=img)
+        lengths = {
+            Phase.WORK: f"{WORK_MINUTES}m",
+            Phase.BREAK: f"{BREAK_MINUTES}m",
+            Phase.FREE: format_duration(self.timer.banked_total),
+        }
         for label_phase, item in self.switch_labels.items():
-            self.canvas.itemconfig(item, fill=self._switch_label_color(label_phase))
+            self.canvas.itemconfig(
+                item,
+                text=f"{PHASE_LABELS[label_phase]} · {lengths[label_phase]}",
+                fill=self._switch_label_color(label_phase),
+            )
 
     def _switch_label_color(self, label_phase: Phase) -> str:
         if label_phase is self.timer.phase:
             return "#ffffff"  # on the gradient
+        if not self._can_select(label_phase):
+            return FAINT
         return FG if label_phase is self.switch_hover else MUTED
+
+    def _can_extend(self) -> bool:
+        """Whether the "+5m from bank" link is shown."""
+        return self.timer.phase is Phase.BREAK and self.timer.bank.balance >= 60
+
+    def _can_select(self, phase: Phase) -> bool:
+        return phase is not Phase.FREE or self.timer.bank.balance > 0
 
     def _button_kind(self, name: ButtonName) -> render.ButtonKind:
         if name == "reset":
@@ -287,8 +396,86 @@ class PomodoroApp:
         self.hover = name
         self.canvas.config(cursor="hand2" if name else "")
         self._render_controls()
+        self._hover_tooltip(name)
+
+    def _hover_link(self, target: OptionName | Literal["extend"] | None) -> None:
+        """Hover handling for the text-like controls: hand cursor plus tooltip."""
+        self.canvas.config(cursor="hand2" if target else "")
+        self._hover_tooltip(target)
+
+    def _click_button(self, action: Callable[[], None]) -> None:
+        self._hide_tooltip()
+        action()
+
+    # ---------- Tooltips ----------
+
+    def _hover_tooltip(self, target: TooltipTarget | None) -> None:
+        """Shows ``target``'s tooltip after a short delay, or hides the tooltip for None."""
+        if target == self._tooltip_target:
+            return
+        self._hide_tooltip()
+        self._tooltip_target = target
+        if target is not None:
+            self._tooltip_job = self.root.after(TOOLTIP_DELAY_MS, self._show_tooltip)
+
+    def _tooltip_anchor(self, target: TooltipTarget) -> tuple[float, float]:
+        """Canvas point the tooltip is centered on: above the round buttons, below everything else."""
+        c, px = self.canvas, self.px
+        if isinstance(target, Phase):
+            return px(self._switch_segment_center(PHASE_ORDER.index(target))), px(PHASE_SWITCH_Y + 30)
+        if target == "extend":
+            x, y = c.coords(self.extend_text)
+            return x, y + px(24)
+        if target == "auto_start" or target == "always_on_top":
+            x, y = c.coords(self.toggles[target])
+            return x + px(19), y + px(23)  # the toggle is anchored at its left edge and 38 wide
+        x, y = c.coords(self.buttons[target])
+        return x, y - px(50)
+
+    def _show_tooltip(self) -> None:
+        self._tooltip_job = None
+        self.canvas.delete("tooltip")
+        target = self._tooltip_target
+        if target is None:
+            return
+        c, px = self.canvas, self.px
+        x, y = self._tooltip_anchor(target)
+        self._tooltip_text = tooltip_text(target, self.timer)
+        text = c.create_text(x, y, text=self._tooltip_text, fill=FG, font=self._tooltip_font, tags="tooltip")
+        x0, y0, x1, y1 = c.bbox(text)
+        pad_x, pad_y = px(8), px(4)
+        c.create_rectangle(
+            x0 - pad_x, y0 - pad_y, x1 + pad_x, y1 + pad_y, fill=TOOLTIP_BG, outline=TOOLTIP_BORDER, tags="tooltip"
+        )
+        c.tag_raise(text)
+        # Keep the tooltip inside the window
+        margin = px(6)
+        overflow_right = x1 + pad_x - (px(WINDOW_WIDTH) - margin)
+        overflow_left = margin - (x0 - pad_x)
+        c.move("tooltip", -max(0.0, overflow_right) + max(0.0, overflow_left), 0)
+
+    def _hide_tooltip(self) -> None:
+        if self._tooltip_job is not None:
+            self.root.after_cancel(self._tooltip_job)
+            self._tooltip_job = None
+        self.canvas.delete("tooltip")
+        self._tooltip_text = None
+
+    def _refresh_tooltip(self) -> None:
+        """Keeps a visible tooltip current, e.g. after Space starts the timer or a break ends."""
+        target = self._tooltip_target
+        if self._tooltip_text is None or target is None:
+            return
+        if target == "extend" and not self._can_extend():
+            self._hide_tooltip()
+        elif tooltip_text(target, self.timer) != self._tooltip_text:
+            self._show_tooltip()
 
     def _set_switch_hover(self, phase: Phase | None) -> None:
+        # Every segment but the current one explains itself, including a greyed-out Free
+        self._hover_tooltip(phase if phase is not self.timer.phase else None)
+        if phase is not None and (phase is self.timer.phase or not self._can_select(phase)):
+            phase = None
         if phase is self.switch_hover:
             return  # <Motion> fires constantly; only redraw when the segment changes
         self.switch_hover = phase
@@ -305,6 +492,7 @@ class PomodoroApp:
             self.always_on_top = not self.always_on_top
             self._apply_topmost()
         self._render_controls()
+        self._save()
 
     def toggle(self) -> None:
         self.timer.toggle()
@@ -312,26 +500,61 @@ class PomodoroApp:
 
     def reset(self) -> None:
         self.timer.reset()
-        self._render()
+        self._changed()
 
     def skip(self) -> None:
-        self.timer.skip()
-        self._render()
+        banked = self.timer.skip()
+        if banked >= 60:
+            self.flash(f"+{format_duration(banked)} banked as free time")
+        self._changed()
 
     def select_phase(self, phase: Phase) -> None:
         self.timer.select_phase(phase)
+        self._set_switch_hover(None)
+        self._changed()
+
+    def extend_break(self) -> None:
+        added = self.timer.extend_break(BANK_EXTEND_MINUTES * 60)
+        if added > 0:
+            self.flash(f"break extended by {format_duration(added)}")
+        self._changed()
+
+    def flash(self, text: str) -> None:
+        """Shows ``text`` under the clock for a few seconds."""
+        self._flash_text = text
+        if self._flash_job is not None:
+            self.root.after_cancel(self._flash_job)
+        self._flash_job = self.root.after(FLASH_MS, self._end_flash)
         self._render()
 
+    def _end_flash(self) -> None:
+        self._flash_text = None
+        self._flash_job = None
+        self._render()
+
+    def _changed(self) -> None:
+        """Redraws and saves after an action that can move time in or out of the bank."""
+        self._render()
+        self._save()
+
     def _tick(self) -> None:
-        if self.timer.running:
-            if self.timer.update():
-                self._on_phase_completed()
+        timer = self.timer
+        if timer.running:
+            ended = timer.phase
+            if timer.update():
+                self._on_phase_completed(ended)
             self._render()
+        gained = timer.bank.accrue(dt.date.today())  # in case the app stays open past midnight
+        if gained >= 60:
+            self.flash(f"+{format_duration(gained)} interest on your free time")
+        if time.monotonic() - self._last_save >= SAVE_INTERVAL_S:
+            self._save()
         self.root.after(TICK_MS, self._tick)
 
-    def _on_phase_completed(self) -> None:
+    def _on_phase_completed(self, ended: Phase) -> None:
         timer = self.timer
-        self.notifier.phase_changed(timer.phase, timer.sessions_done, timer.auto_start)
+        self._save()
+        self.notifier.phase_changed(timer.phase, timer.sessions_done, timer.auto_start, ended)
 
         # Pop the window to the front so the user notices the phase change
         self.root.deiconify()
@@ -343,13 +566,50 @@ class PomodoroApp:
     def _apply_topmost(self) -> None:
         self.root.attributes("-topmost", self.always_on_top)
 
+    # ---------- Persistence ----------
+
+    def _save(self) -> None:
+        self._last_save = time.monotonic()
+        if self.state_path is None:
+            return
+        state = storage.SavedState(
+            bank_seconds=self.timer.banked_total,
+            interest_date=self.timer.bank.interest_date,
+            auto_start=self.timer.auto_start,
+            always_on_top=self.always_on_top,
+        )
+        storage.save(self.state_path, state)
+
+    def _close(self) -> None:
+        self._save()
+        self.root.destroy()
+
 
 def main() -> None:
     logging.basicConfig(level=logging.WARNING, format="%(levelname)s %(name)s: %(message)s")
     win32.init_process()
+    state_path = storage.default_path()
+    state = storage.load(state_path)
+    today = dt.date.today()
+    bank = TimeBank(
+        balance=state.bank_seconds,
+        interest_date=state.interest_date or today,
+        daily_interest=BANK_DAILY_INTEREST,
+        interest_cap=BANK_INTEREST_CAP_MINUTES * 60,
+    )
+    interest = bank.accrue(today)
+
     root = tk.Tk()
-    timer = PomodoroTimer(WORK_MINUTES * 60, BREAK_MINUTES * 60)
-    PomodoroApp(root, timer, Notifier())
+    timer = PomodoroTimer(
+        WORK_MINUTES * 60,
+        BREAK_MINUTES * 60,
+        bank=bank,
+        min_work_to_bank=BANK_MIN_WORK_MINUTES * 60,
+        auto_start=state.auto_start,
+    )
+    app = PomodoroApp(root, timer, Notifier(), state_path=state_path, always_on_top=state.always_on_top)
+    if interest >= 60:
+        app.flash(f"+{format_duration(interest)} interest on your free time")
     root.mainloop()
 
 

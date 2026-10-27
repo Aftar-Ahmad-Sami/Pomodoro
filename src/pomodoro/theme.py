@@ -10,16 +10,19 @@ BG_BOTTOM: RGB = (10, 10, 16)
 FG = "#f4f4f8"
 MUTED = "#8b8ba3"
 FAINT = "#5c5c74"
+TOOLTIP_BG = "#2b2840"
+TOOLTIP_BORDER = "#3d3a56"
 
 PALETTES: dict[Phase, Palette] = {
     Phase.WORK: ((255, 107, 107), (255, 169, 77)),
     Phase.BREAK: ((46, 230, 168), (63, 169, 245)),
+    Phase.FREE: ((167, 139, 250), (244, 114, 182)),
 }
 
 WINDOW_WIDTH, WINDOW_HEIGHT = 380, 640
 
 PHASE_SWITCH_Y = 84
-PHASE_SWITCH_WIDTH = 220
+PHASE_SWITCH_WIDTH = 300
 PHASE_SWITCH_HEIGHT = 32
 PHASE_SWITCH_PAD = 3  # gap between the track and the highlighted segment
 

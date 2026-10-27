@@ -28,14 +28,15 @@ class ToastMessage:
     body: str
 
 
-def toast_message(new_phase: Phase, sessions_done: int, auto_start: bool) -> ToastMessage:
-    """Text announcing the phase that just began."""
+def toast_message(new_phase: Phase, sessions_done: int, auto_start: bool, ended: Phase = Phase.BREAK) -> ToastMessage:
+    """Text announcing the phase that just began, after ``ended`` ran out."""
     if new_phase is Phase.BREAK:
         title = f"Break time · {BREAK_MINUTES} min"
         body = f"Focus session {sessions_done} done. Step away from the screen and stretch."
     else:
         title = f"Back to focus · {WORK_MINUTES} min"
-        body = f"Break is over. Time for session {sessions_done + 1}."
+        over = "Free time is over" if ended is Phase.FREE else "Break is over"
+        body = f"{over}. Time for session {sessions_done + 1}."
     if not auto_start:
         body += " Press Start when you are ready."
     return ToastMessage(title, body)
@@ -52,9 +53,9 @@ class Notifier:
             except OSError:
                 log.warning("Could not register toast identity", exc_info=True)
 
-    def phase_changed(self, new_phase: Phase, sessions_done: int, auto_start: bool) -> None:
+    def phase_changed(self, new_phase: Phase, sessions_done: int, auto_start: bool, ended: Phase) -> None:
         self._play_chime(new_phase)
-        self._show_toast(toast_message(new_phase, sessions_done, auto_start))
+        self._show_toast(toast_message(new_phase, sessions_done, auto_start, ended))
 
     def _play_chime(self, new_phase: Phase) -> None:
         if winsound is None:

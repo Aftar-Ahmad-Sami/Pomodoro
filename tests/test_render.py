@@ -40,13 +40,13 @@ def test_toggle_renders(on: bool) -> None:
 
 
 @pytest.mark.parametrize("scale", SCALES)
-@pytest.mark.parametrize(("active", "hover"), [(0, None), (1, None), (0, 1), (1, 1)])
+@pytest.mark.parametrize(("active", "hover"), [(0, None), (2, None), (0, 1), (1, 1)])
 def test_phase_switch_renders(scale: float, active: int, hover: int | None) -> None:
-    img = render.render_phase_switch(scale, active, hover, COLORS)
+    img = render.render_phase_switch(scale, 3, active, hover, COLORS)
     assert img.size == (round(PHASE_SWITCH_WIDTH * scale), round(PHASE_SWITCH_HEIGHT * scale))
     # The highlighted segment is opaque in its middle
     w, h = img.size
-    assert img.getpixel((w // 4 + active * w // 2, h // 2))[3] == 255  # type: ignore[index]
+    assert img.getpixel((round(w * (active + 0.5) / 3), h // 2))[3] == 255  # type: ignore[index]
 
 
 @pytest.mark.parametrize("filled", [True, False])
