@@ -20,3 +20,11 @@ env/
 Thumbs.db
 desktop.ini
 .DS_Store
+
+# Packaging
+*.egg-info/
+
+# Tool caches
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/

@@ -1,0 +1,140 @@
+import pytest
+
+from pomodoro.timer import Phase, PomodoroTimer
+
+WORK, BREAK = 100.0, 20.0
+
+
+class FakeClock:
+    def __init__(self) -> None:
+        self.now = 1000.0
+
+    def __call__(self) -> float:
+        return self.now
+
+    def advance(self, seconds: float) -> None:
+        self.now += seconds
+
+
+@pytest.fixture
+def clock() -> FakeClock:
+    return FakeClock()
+
+
+@pytest.fixture
+def timer(clock: FakeClock) -> PomodoroTimer:
+    return PomodoroTimer(WORK, BREAK, clock=clock)
+
+
+def test_starts_fresh_in_work_phase(timer: PomodoroTimer) -> None:
+    assert timer.phase is Phase.WORK
+    assert not timer.running
+    assert timer.is_fresh
+    assert timer.remaining == WORK
+    assert timer.progress == 0.0
+    assert timer.sessions_done == 0
+
+
+def test_rejects_non_positive_durations() -> None:
+    with pytest.raises(ValueError):
+        PomodoroTimer(0, BREAK)
+
+
+def test_counts_down_while_running(timer: PomodoroTimer, clock: FakeClock) -> None:
+    timer.start()
+    clock.advance(30)
+    assert timer.remaining == pytest.approx(70)
+    assert timer.progress == pytest.approx(0.3)
+    assert not timer.is_fresh
+
+
+def test_pause_freezes_remaining_time(timer: PomodoroTimer, clock: FakeClock) -> None:
+    timer.start()
+    clock.advance(30)
+    timer.pause()
+    clock.advance(500)
+    assert not timer.running
+    assert timer.remaining == pytest.approx(70)
+
+    timer.toggle()
+    clock.advance(10)
+    assert timer.remaining == pytest.approx(60)
+
+
+def test_remaining_whole_seconds_shows_full_duration_at_start(timer: PomodoroTimer, clock: FakeClock) -> None:
+    timer.start()
+    clock.advance(0.01)
+    assert timer.remaining_whole_seconds == WORK
+    clock.advance(0.5)
+    assert timer.remaining_whole_seconds == WORK
+    clock.advance(1)
+    assert timer.remaining_whole_seconds == WORK - 1
+
+
+def test_update_does_nothing_before_phase_ends(timer: PomodoroTimer, clock: FakeClock) -> None:
+    timer.start()
+    clock.advance(WORK - 1)
+    assert timer.update() is False
+    assert timer.phase is Phase.WORK
+
+
+def test_completed_work_counts_session_and_auto_starts_break(timer: PomodoroTimer, clock: FakeClock) -> None:
+    timer.start()
+    clock.advance(WORK + 5)
+    assert timer.update() is True
+    assert timer.phase is Phase.BREAK
+    assert timer.sessions_done == 1
+    assert timer.running
+    assert timer.remaining == BREAK
+
+
+def test_completed_break_returns_to_work_without_counting(timer: PomodoroTimer, clock: FakeClock) -> None:
+    timer.start()
+    clock.advance(WORK)
+    timer.update()
+    clock.advance(BREAK)
+    assert timer.update() is True
+    assert timer.phase is Phase.WORK
+    assert timer.sessions_done == 1
+
+
+def test_without_auto_start_next_phase_waits(clock: FakeClock) -> None:
+    timer = PomodoroTimer(WORK, BREAK, auto_start=False, clock=clock)
+    timer.start()
+    clock.advance(WORK)
+    timer.update()
+    assert timer.phase is Phase.BREAK
+    assert not timer.running
+    assert timer.is_fresh
+
+
+def test_skip_moves_on_without_counting_or_starting(timer: PomodoroTimer, clock: FakeClock) -> None:
+    timer.start()
+    clock.advance(10)
+    timer.skip()
+    assert timer.phase is Phase.BREAK
+    assert timer.sessions_done == 0
+    assert not timer.running
+    assert timer.remaining == BREAK
+
+
+def test_reset_during_work_restarts_work(timer: PomodoroTimer, clock: FakeClock) -> None:
+    timer.start()
+    clock.advance(40)
+    timer.reset()
+    assert timer.phase is Phase.WORK
+    assert not timer.running
+    assert timer.remaining == WORK
+
+
+def test_reset_during_break_returns_to_work(timer: PomodoroTimer) -> None:
+    timer.skip()
+    timer.reset()
+    assert timer.phase is Phase.WORK
+    assert timer.remaining == WORK
+
+
+def test_update_is_idle_while_paused(timer: PomodoroTimer, clock: FakeClock) -> None:
+    clock.advance(WORK * 10)
+    assert timer.update() is False
+    assert timer.phase is Phase.WORK
