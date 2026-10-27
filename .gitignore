@@ -1,30 +1,48 @@
-# Python
+# ---------- Python ----------
 __pycache__/
 *.py[cod]
+*.pyd
 
-# PyInstaller build output
-build/
-dist/
-*.spec
+# Packaging
+*.egg-info/
+*.egg
+.eggs/
+wheels/
 
 # Virtual environments
 .venv/
 venv/
 env/
 
-# Editors
-.vscode/
-.idea/
+# ---------- Build output ----------
+# PyInstaller (scripts/build.ps1 passes all options on the command line, so .spec files are generated)
+build/
+dist/
+*.spec
 
-# OS files
-Thumbs.db
-desktop.ini
-.DS_Store
-
-# Packaging
-*.egg-info/
-
-# Tool caches
+# ---------- Tools ----------
 .pytest_cache/
 .mypy_cache/
+.dmypy.json
 .ruff_cache/
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
+
+# ---------- Local config and logs ----------
+.env
+*.log
+.claude/settings.local.json
+
+# ---------- Editors ----------
+.vscode/
+.idea/
+*.swp
+*~
+
+# ---------- OS ----------
+Thumbs.db
+desktop.ini
+$RECYCLE.BIN/
+.DS_Store
