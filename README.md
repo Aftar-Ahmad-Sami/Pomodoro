@@ -32,7 +32,7 @@ A Windows desktop timer for the **52/17 productivity rule**: 52 minutes of focus
 
 **Requirements:** Windows 10 or 11. No admin rights needed.
 
-1. Get `PomodoroSetup.exe`: download it from the latest [CI run](https://github.com/Aftar-Ahmad-Sami/Pomodoro/actions/workflows/ci.yml) (artifact `pomodoro-windows`), or [build it yourself](#building).
+1. Download `PomodoroSetup.exe` from the [latest release](https://github.com/Aftar-Ahmad-Sami/Pomodoro/releases/latest), or [build it yourself](#building). Each release also has `Pomodoro.exe`, which runs on its own without installing.
 2. Run it, choose whether to add a desktop shortcut, and click **Install**.
 
 Setup installs for the current user only:
@@ -146,6 +146,8 @@ The token stays on your PC in that file and is never stored in the repo. Uninsta
 
 ## Development
 
+Contributions are welcome: see [CONTRIBUTING.md](CONTRIBUTING.md), and report security issues privately as described in [SECURITY.md](SECURITY.md).
+
 Requires Python 3.10+ on Windows. Use either a virtual environment inside the project:
 
 ```powershell
@@ -213,7 +215,7 @@ This writes two files to `dist\`:
 
 The script prints the Python it uses, picked in this order: `-Python <path\to\python.exe>` if given, the activated venv, the activated conda environment, the project's `.venv`, then `python` on PATH. It stops with a clear message if PyInstaller isn't installed there. With a conda interpreter it also bundles conda's Tcl/Tk DLLs, which PyInstaller misses on its own (the exe would otherwise fail with `DLL load failed while importing _tkinter`).
 
-CI builds both files on every push and keeps them as the `pomodoro-windows` artifact.
+CI builds both files on every push and keeps them as the `pomodoro-windows` artifact. Pushing a version tag (e.g. `v1.1.0`) publishes them as a GitHub Release; see [Releasing](CONTRIBUTING.md#releasing-maintainers).
 
 ## Customizing
 

@@ -1,0 +1,46 @@
+name: Release
+
+# Push a version tag to publish a GitHub Release with the app and installer:
+#   git tag v1.0.0
+#   git push origin v1.0.0
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+jobs:
+  release:
+    runs-on: windows-latest
+    permissions:
+      contents: write # create the release and upload its files
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install
+        run: python -m pip install -e ".[dev,build]"
+      - name: Check the tag matches the version
+        shell: powershell
+        run: |
+          $tag = "${{ github.ref_name }}".TrimStart("v")
+          $package = python -c "import pomodoro; print(pomodoro.__version__)"
+          $project = python -c "import tomllib; print(tomllib.load(open('pyproject.toml', 'rb'))['project']['version'])"
+          if ($tag -ne $package -or $tag -ne $project) {
+            throw "Tag v$tag doesn't match the version in pomodoro/__init__.py ($package) and pyproject.toml ($project)"
+          }
+      - name: Test
+        run: pytest
+      - name: Build app and installer
+        shell: powershell
+        run: .\scripts\build.ps1 -Python (Get-Command python).Source
+      - name: Publish release
+        shell: powershell
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${{ github.ref_name }}" dist/PomodoroSetup.exe dist/Pomodoro.exe `
+            --title "Pomodoro ${{ github.ref_name }}" `
+            --generate-notes

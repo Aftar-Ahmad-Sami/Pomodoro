@@ -1,0 +1,51 @@
+name: Bug report
+description: Something doesn't work as described in the README
+labels: [bug]
+body:
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: What you did, what you expected, and what happened instead.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Start a focus session
+        2. Press S after 30 minutes
+        3. ...
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Pomodoro version
+      description: Shown in the setup window title, or under Settings → Apps → Installed apps.
+      placeholder: "1.0.0"
+    validations:
+      required: true
+  - type: dropdown
+    id: install
+    attributes:
+      label: How do you run it?
+      options:
+        - Installed with PomodoroSetup.exe
+        - Pomodoro.exe on its own
+        - From source (python -m pomodoro)
+    validations:
+      required: true
+  - type: input
+    id: windows
+    attributes:
+      label: Windows version
+      placeholder: Windows 11 24H2
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Error messages or screenshots
+      description: Anything shown under the clock or in a terminal. Remove Slack tokens and other secrets first.
