@@ -21,6 +21,7 @@ A Windows desktop timer for the **52/17 productivity rule**: 52 minutes of focus
 - Time bank: finish focus early and the leftover minutes become guilt-free free time, which earns interest until you spend it
 - Start/Pause, Reset and Skip controls, with keyboard shortcuts; hover over a button to see what it does and its shortcut
 - Windows notification, a chime and the window popping to the front when a phase ends
+- Slack alerts for when you start the timer and walk away, deleted from the channel automatically after a few hours
 - Auto-start of the next phase and "always on top" toggles
 - Session dots and total focused time
 - Countdown in the window title, visible on the taskbar
@@ -41,7 +42,7 @@ Setup installs for the current user only:
 | App and uninstaller | `%LOCALAPPDATA%\Programs\Pomodoro` |
 | Shortcuts | Start menu, and the Desktop if selected |
 | Uninstall entry | **Settings → Apps → Installed apps** |
-| App data (time bank, settings, notification icon) | `%LOCALAPPDATA%\Pomodoro` |
+| App data (time bank, settings, notification icon, Slack settings) | `%LOCALAPPDATA%\Pomodoro` |
 
 Running setup again upgrades an existing install in place.
 
@@ -79,7 +80,59 @@ Spend it two ways:
 - **Free time:** pick **Free** in the switch (or press `T`) and start it. It counts down your balance; pause or switch away and whatever is left stays banked. When it runs out, Pomodoro moves to focus.
 - **Longer breaks:** during a break, click **+5m from bank** (or press `E`).
 
-Or invest it: unspent time earns **10% interest per day**, compounding, until the balance reaches 4 hours. Banked time never expires. The balance is saved in `%LOCALAPPDATA%\Pomodoro\state.json`, along with the Auto-start and Always on top settings.
+Or invest it: unspent time earns **10% interest per day**, compounding, until the balance reaches 4 hours. Banked time never expires. The balance is saved in `%LOCALAPPDATA%\Pomodoro\state.json`, along with the Auto-start, Always on top and Slack alerts settings.
+
+### Slack alerts
+
+Turn on **Slack alerts** before walking away and every phase change is also posted to a Slack channel. Each alert is deleted from the channel after a few hours (3 by default), so the channel stays clean. Pomodoro checks for expired alerts every 10 minutes while it runs; alerts that expire while it's closed are deleted the next time it starts.
+
+Deleting messages needs a Slack app with a bot token (Slack's simpler incoming webhooks can't delete). One-time setup:
+
+1. Go to [api.slack.com/apps](https://api.slack.com/apps), click **Create New App → Paste a manifest**, pick your workspace and paste this (JSON):
+
+   ```json
+   {
+     "display_information": {
+       "name": "Pomodoro",
+       "description": "Phase-change alerts from the Pomodoro timer"
+     },
+     "features": {
+       "bot_user": { "display_name": "Pomodoro", "always_online": false }
+     },
+     "oauth_config": {
+       "scopes": { "bot": ["chat:write"] }
+     },
+     "settings": {
+       "org_deploy_enabled": false,
+       "socket_mode_enabled": false,
+       "token_rotation_enabled": false
+     }
+   }
+   ```
+
+   `chat:write` covers both posting alerts and deleting them. Keep token rotation off: rotated tokens expire after 12 hours.
+
+   To show the Pomodoro logo next to alerts, open **Basic Information → Display Information** and upload [docs/slack-icon.png](docs/slack-icon.png) as the app icon.
+2. Click **Install to Workspace**, then copy the **Bot User OAuth Token** from **OAuth & Permissions** (starts with `xoxb-`). Some workspaces need an admin to approve the install.
+3. In Slack, open the channel for the alerts and type `/invite @Pomodoro`.
+4. Find the channel ID: click the channel name; it's at the bottom of the **About** tab (starts with `C`).
+5. Optional: to get a phone notification for each alert, copy your member ID from your Slack profile (**⋮ → Copy member ID**, starts with `U`). Alerts will mention you.
+6. Create `%LOCALAPPDATA%\Pomodoro\slack.json`:
+
+   ```json
+   {
+     "token": "xoxb-...",
+     "channel": "C0123456789",
+     "mention_user_id": "U0123456789",
+     "delete_after_hours": 3
+   }
+   ```
+
+   `mention_user_id` and `delete_after_hours` are optional.
+
+Then switch on **Slack alerts**. Pomodoro posts a confirmation to the channel, which is deleted like the other alerts. If something is wrong, the reason appears under the clock (for example `Slack: not_in_channel` means step 3 was skipped). Settings are read each time you switch the toggle on, so there's no need to restart after editing the file.
+
+The token stays on your PC in that file and is never stored in the repo. Uninstalling Pomodoro removes it, along with the list of alerts still waiting to be deleted.
 
 ## Troubleshooting
 
@@ -129,6 +182,7 @@ src/pomodoro/
   storage.py     Saves the bank and settings between launches
   render.py      Pillow rendering of the ring, buttons, toggles and dots
   notify.py      Chime and Windows toast when a phase ends
+  slack.py       Slack alerts and their automatic deletion
   win32.py       Windows integration: DPI, title bar, taskbar identity, shortcuts
   installer.py   Per-user installer and uninstaller, built into PomodoroSetup.exe
   formatting.py  User-facing text derived from timer state
@@ -138,7 +192,7 @@ src/pomodoro/
 scripts/
   build.ps1      Builds Pomodoro.exe and PomodoroSetup.exe
   make_icon.py   Regenerates the icon files
-tests/           Timer, bank, storage, formatting, rendering, installer and Windows tests
+tests/           Timer, bank, storage, formatting, rendering, Slack, installer and Windows tests
 ```
 
 The timer takes its clock as a parameter, so its behavior is tested with a fake clock and no window. The installer tests install into a temporary folder and don't touch the registry.

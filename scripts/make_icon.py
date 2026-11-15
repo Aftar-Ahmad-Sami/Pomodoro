@@ -1,7 +1,8 @@
-"""Generates src/pomodoro/assets/icon.ico and icon.png.
+"""Generates src/pomodoro/assets/icon.ico and icon.png, plus docs/slack-icon.png.
 
 The logo is a split ring: a coral arc for the 52 focus minutes and a
-mint arc for the 17 break minutes.
+mint arc for the 17 break minutes. The Slack version fills the whole
+square, because Slack rounds the corners of app icons itself.
 
 Usage: python scripts/make_icon.py
 """
@@ -19,7 +20,10 @@ FOCUS: Palette = ((255, 107, 107), (255, 169, 77))
 BREAK: Palette = ((46, 230, 168), (63, 169, 245))
 BG: Palette = ((44, 38, 72), (14, 12, 22))
 ICO_SIZES = [16, 20, 24, 32, 40, 48, 64, 128, 256]
-OUT_DIR = Path(__file__).resolve().parent.parent / "src" / "pomodoro" / "assets"
+SLACK_SIZE = 1024  # Slack accepts 512 to 2000 px
+ROOT = Path(__file__).resolve().parent.parent
+OUT_DIR = ROOT / "src" / "pomodoro" / "assets"
+SLACK_ICON = ROOT / "docs" / "slack-icon.png"
 
 
 def lerp(a: RGB, b: RGB, t: float) -> RGB:
@@ -38,23 +42,25 @@ def draw_arc(
 ) -> None:
     box = (c - r - sw / 2, c - r - sw / 2, c + r + sw / 2, c + r + sw / 2)
     steps = max(1, math.ceil(extent / 1.5))
+    # Round caps first, so the arc covers their inner half and no seam shows at large sizes
+    for ang, t in ((start, 0.5 / steps), (start + extent, 1 - 0.5 / steps)):
+        col = lerp(colors[0], colors[1], t)
+        x = c + r * math.cos(math.radians(ang))
+        y = c + r * math.sin(math.radians(ang))
+        draw.ellipse((x - sw / 2, y - sw / 2, x + sw / 2, y + sw / 2), fill=(*col, 255))
     for i in range(steps):
         a0 = start + extent * i / steps
         a1 = start + extent * (i + 1) / steps
         col = lerp(colors[0], colors[1], (i + 0.5) / steps)
-        draw.arc(box, a0, a1 + 0.6, fill=(*col, 255), width=sw)
-    for ang, col in ((start, colors[0]), (start + extent, colors[1])):
-        x = c + r * math.cos(math.radians(ang))
-        y = c + r * math.sin(math.radians(ang))
-        draw.ellipse((x - sw / 2, y - sw / 2, x + sw / 2, y + sw / 2), fill=(*col, 255))
+        draw.arc(box, a0, min(a1 + 0.6, start + extent), fill=(*col, 255), width=sw)
 
 
-def render(size: int) -> Image.Image:
+def render(size: int, rounded: bool = True) -> Image.Image:
     big = size * SS
     c = big / 2
 
     mask = Image.new("L", (big, big), 0)
-    ImageDraw.Draw(mask).rounded_rectangle((0, 0, big - 1, big - 1), radius=big * 0.23, fill=255)
+    ImageDraw.Draw(mask).rounded_rectangle((0, 0, big - 1, big - 1), radius=big * 0.23 if rounded else 0, fill=255)
     img = Image.new("RGBA", (big, big), (0, 0, 0, 0))
     img.paste(diagonal_gradient(big, *BG), (0, 0), mask)
 
@@ -89,7 +95,9 @@ def main() -> None:
         append_images=frames[:-1],
     )
     frames[-1].save(OUT_DIR / "icon.png")
-    print(f"Wrote {OUT_DIR / 'icon.ico'} and {OUT_DIR / 'icon.png'}")
+    SLACK_ICON.parent.mkdir(parents=True, exist_ok=True)
+    render(SLACK_SIZE, rounded=False).save(SLACK_ICON)
+    print(f"Wrote {OUT_DIR / 'icon.ico'}, {OUT_DIR / 'icon.png'} and {SLACK_ICON}")
 
 
 if __name__ == "__main__":

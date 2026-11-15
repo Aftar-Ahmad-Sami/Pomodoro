@@ -26,6 +26,7 @@ class SavedState:
     interest_date: dt.date | None = None
     auto_start: bool = True
     always_on_top: bool = False
+    slack_alerts: bool = False
 
 
 def load(path: Path) -> SavedState:
@@ -37,6 +38,7 @@ def load(path: Path) -> SavedState:
             interest_date=dt.date.fromisoformat(data["interest_date"]) if data.get("interest_date") else None,
             auto_start=bool(data.get("auto_start", True)),
             always_on_top=bool(data.get("always_on_top", False)),
+            slack_alerts=bool(data.get("slack_alerts", False)),
         )
     except FileNotFoundError:
         return SavedState()
@@ -53,6 +55,7 @@ def save(path: Path, state: SavedState) -> None:
         "interest_date": state.interest_date.isoformat() if state.interest_date else None,
         "auto_start": state.auto_start,
         "always_on_top": state.always_on_top,
+        "slack_alerts": state.slack_alerts,
     }
     try:
         path.parent.mkdir(parents=True, exist_ok=True)

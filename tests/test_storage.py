@@ -11,7 +11,13 @@ def test_missing_file_gives_defaults(tmp_path: Path) -> None:
 
 def test_round_trip(tmp_path: Path) -> None:
     path = tmp_path / "nested" / "state.json"
-    state = SavedState(bank_seconds=1234.5, interest_date=dt.date(2026, 10, 26), auto_start=False, always_on_top=True)
+    state = SavedState(
+        bank_seconds=1234.5,
+        interest_date=dt.date(2026, 10, 26),
+        auto_start=False,
+        always_on_top=True,
+        slack_alerts=True,
+    )
     storage.save(path, state)
     assert storage.load(path) == state
     assert not path.with_suffix(".tmp").exists()

@@ -19,7 +19,7 @@ PALETTES: dict[Phase, Palette] = {
     Phase.FREE: ((167, 139, 250), (244, 114, 182)),
 }
 
-WINDOW_WIDTH, WINDOW_HEIGHT = 380, 640
+WINDOW_WIDTH, WINDOW_HEIGHT = 380, 676
 
 PHASE_SWITCH_Y = 84
 PHASE_SWITCH_WIDTH = 300
@@ -35,6 +35,7 @@ DOT_SPACING = 20
 CONTROLS_Y = 522
 CONTROL_SPACING = 92
 OPTIONS_Y = 600
+OPTIONS_ROW_GAP = 36  # between the two rows of option toggles
 
 
 def hex_color(rgb: RGB) -> str:

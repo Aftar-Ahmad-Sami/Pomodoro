@@ -5,9 +5,11 @@ Graphics are rendered with Pillow (see :mod:`pomodoro.render`) and layered on a 
 
 from __future__ import annotations
 
+import contextlib
 import datetime as dt
 import functools
 import logging
+import queue
 import time
 import tkinter as tk
 from collections.abc import Callable, Hashable
@@ -17,7 +19,7 @@ from typing import Literal
 
 from PIL import Image, ImageTk
 
-from pomodoro import render, storage, win32
+from pomodoro import render, slack, storage, win32
 from pomodoro.bank import TimeBank
 from pomodoro.config import (
     BANK_DAILY_INTEREST,
@@ -32,7 +34,7 @@ from pomodoro.config import (
     WORK_MINUTES,
 )
 from pomodoro.formatting import filled_dots, format_clock, format_duration, format_focus_summary
-from pomodoro.notify import Notifier
+from pomodoro.notify import Notifier, toast_message
 from pomodoro.theme import (
     BG_TOP,
     CONTROL_SPACING,
@@ -42,6 +44,7 @@ from pomodoro.theme import (
     FAINT,
     FG,
     MUTED,
+    OPTIONS_ROW_GAP,
     OPTIONS_Y,
     PALETTES,
     PHASE_SWITCH_PAD,
@@ -61,6 +64,7 @@ log = logging.getLogger(__name__)
 POP_TOPMOST_MS = 1500  # how long the window stays on top after a phase change
 FLASH_MS = 4000  # how long a status message replaces the text under the clock
 SAVE_INTERVAL_S = 30  # how often state is saved while the app runs, in case it is killed
+SLACK_SWEEP_MS = 10 * 60 * 1000  # how often expired Slack alerts are looked for and deleted
 
 ButtonName = Literal["reset", "toggle", "skip"]
 
@@ -70,7 +74,7 @@ RUNNING_TEXT = {Phase.WORK: "until break", Phase.BREAK: "until focus", Phase.FRE
 TOOLTIP_DELAY_MS = 400
 
 
-OptionName = Literal["auto_start", "always_on_top"]
+OptionName = Literal["auto_start", "always_on_top", "slack_alerts"]
 # Anything that shows a tooltip on hover: a round button, a switch segment, an option toggle or the extend link
 TooltipTarget = ButtonName | Phase | OptionName | Literal["extend"]
 
@@ -97,6 +101,8 @@ def tooltip_text(target: TooltipTarget, timer: PomodoroTimer) -> str:
         return "Start the next phase by itself when one ends"
     if target == "always_on_top":
         return "Keep this window above other windows"
+    if target == "slack_alerts":
+        return "Also post alerts to Slack, for when you step away"
     return f"Add {BANK_EXTEND_MINUTES}m from your bank ({format_duration(timer.bank.balance)} left) · E"
 
 
@@ -109,6 +115,8 @@ class PomodoroApp:
         *,
         state_path: Path | None = None,
         always_on_top: bool = False,
+        slack_alerts: bool = False,
+        slack_connect: Callable[[], slack.SlackAlerts | None] | None = None,
     ) -> None:
         self.root = root
         self.timer = timer
@@ -117,6 +125,10 @@ class PomodoroApp:
         self.scale = root.winfo_fpixels("1i") / 96
 
         self.always_on_top = always_on_top
+        # Re-run when the toggle is switched on, so Slack can be set up while the app is open
+        self._slack_connect = slack_connect or (lambda: None)
+        self.slack = self._slack_connect()
+        self.slack_alerts = slack_alerts and self.slack is not None
         self.hover: ButtonName | None = None
         self.switch_hover: Phase | None = None
         self._flash_text: str | None = None
@@ -137,6 +149,7 @@ class PomodoroApp:
         self._render()
         self.root.protocol("WM_DELETE_WINDOW", self._close)
         self.root.after(TICK_MS, self._tick)
+        self._sweep_slack()
 
     def px(self, v: float) -> float:
         return v * self.scale
@@ -238,13 +251,14 @@ class PomodoroApp:
 
         # Option toggles
         self.toggles: dict[OptionName, int] = {}
-        options: tuple[tuple[OptionName, str, int], ...] = (
-            ("auto_start", "Auto-start", 62),
-            ("always_on_top", "Always on top", 200),
+        options: tuple[tuple[OptionName, str, int, int], ...] = (
+            ("auto_start", "Auto-start", 62, OPTIONS_Y),
+            ("always_on_top", "Always on top", 200, OPTIONS_Y),
+            ("slack_alerts", "Slack alerts", 62, OPTIONS_Y + OPTIONS_ROW_GAP),
         )
-        for option, label, x in options:
-            sw = c.create_image(px(x), px(OPTIONS_Y), anchor="w")
-            lbl = c.create_text(px(x + 46), px(OPTIONS_Y), text=label, font=(text, 10), fill=MUTED, anchor="w")
+        for option, label, x, y in options:
+            sw = c.create_image(px(x), px(y), anchor="w")
+            lbl = c.create_text(px(x + 46), px(y), text=label, font=(text, 10), fill=MUTED, anchor="w")
             self.toggles[option] = sw
             for item in (sw, lbl):
                 self._bind_option(item, option)
@@ -426,7 +440,7 @@ class PomodoroApp:
         if target == "extend":
             x, y = c.coords(self.extend_text)
             return x, y + px(24)
-        if target == "auto_start" or target == "always_on_top":
+        if target == "auto_start" or target == "always_on_top" or target == "slack_alerts":
             x, y = c.coords(self.toggles[target])
             return x + px(19), y + px(23)  # the toggle is anchored at its left edge and 38 wide
         x, y = c.coords(self.buttons[target])
@@ -482,17 +496,42 @@ class PomodoroApp:
         self.canvas.config(cursor="hand2" if phase else "")
         self._render_controls()
 
-    def _option(self, name: str) -> bool:
-        return self.timer.auto_start if name == "auto_start" else self.always_on_top
+    def _option(self, name: OptionName) -> bool:
+        if name == "auto_start":
+            return self.timer.auto_start
+        if name == "slack_alerts":
+            return self.slack_alerts
+        return self.always_on_top
 
-    def _flip(self, name: str) -> None:
+    def _flip(self, name: OptionName) -> None:
         if name == "auto_start":
             self.timer.auto_start = not self.timer.auto_start
+        elif name == "slack_alerts":
+            self._flip_slack()
         else:
             self.always_on_top = not self.always_on_top
             self._apply_topmost()
         self._render_controls()
         self._save()
+
+    def _flip_slack(self) -> None:
+        if self.slack_alerts:
+            self.slack_alerts = False
+            return
+        self.slack = self._slack_connect()  # picks up settings added or changed since launch
+        if self.slack is None:
+            self.flash("set up Slack first: see the README")
+            return
+        self.slack_alerts = True
+        hours = f"{self.slack.config.delete_after_hours:g}h"
+        self.slack.post(f"Pomodoro alerts are on. Each alert is deleted after {hours}.")
+        self.flash("Slack alerts on")
+
+    def _sweep_slack(self) -> None:
+        # Runs even with the toggle off, so alerts from earlier still get deleted
+        if self.slack is not None:
+            self.slack.delete_expired()
+        self.root.after(SLACK_SWEEP_MS, self._sweep_slack)
 
     def toggle(self) -> None:
         self.timer.toggle()
@@ -549,12 +588,18 @@ class PomodoroApp:
             self.flash(f"+{format_duration(gained)} interest on your free time")
         if time.monotonic() - self._last_save >= SAVE_INTERVAL_S:
             self._save()
+        if self.slack is not None:
+            with contextlib.suppress(queue.Empty):
+                self.flash(self.slack.errors.get_nowait())
         self.root.after(TICK_MS, self._tick)
 
     def _on_phase_completed(self, ended: Phase) -> None:
         timer = self.timer
         self._save()
         self.notifier.phase_changed(timer.phase, timer.sessions_done, timer.auto_start, ended)
+        if self.slack_alerts and self.slack is not None:
+            message = toast_message(timer.phase, timer.sessions_done, timer.auto_start, ended)
+            self.slack.post(slack.format_alert(message, self.slack.config.mention_user_id))
 
         # Pop the window to the front so the user notices the phase change
         self.root.deiconify()
@@ -577,6 +622,7 @@ class PomodoroApp:
             interest_date=self.timer.bank.interest_date,
             auto_start=self.timer.auto_start,
             always_on_top=self.always_on_top,
+            slack_alerts=self.slack_alerts,
         )
         storage.save(self.state_path, state)
 
@@ -607,7 +653,15 @@ def main() -> None:
         min_work_to_bank=BANK_MIN_WORK_MINUTES * 60,
         auto_start=state.auto_start,
     )
-    app = PomodoroApp(root, timer, Notifier(), state_path=state_path, always_on_top=state.always_on_top)
+    app = PomodoroApp(
+        root,
+        timer,
+        Notifier(),
+        state_path=state_path,
+        always_on_top=state.always_on_top,
+        slack_alerts=state.slack_alerts,
+        slack_connect=slack.connect,
+    )
     if interest >= 60:
         app.flash(f"+{format_duration(interest)} interest on your free time")
     root.mainloop()
