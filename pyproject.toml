@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools>=77"]
+requires = ["setuptools>=84.2.1"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -12,7 +12,7 @@ license-files = ["LICENSE"]
 authors = [{ name = "Aftar Ahmad Sami" }]
 requires-python = ">=3.10"
 dependencies = [
-    "pillow>=10.0",
+    "pillow>=12.3.0",
     "winotify>=1.1; sys_platform == 'win32'",
 ]
 classifiers = [
@@ -23,11 +23,11 @@ classifiers = [
 
 [project.optional-dependencies]
 dev = [
-    "mypy>=1.10",
-    "pytest>=8.0",
-    "ruff>=0.6",
+    "mypy>=2.4.1",
+    "pytest>=9.2.0",
+    "ruff>=0.17.5",
 ]
-build = ["pyinstaller>=6.0"]
+build = ["pyinstaller>=6.22.3"]
 
 [project.gui-scripts]
 pomodoro = "pomodoro.app:main"
