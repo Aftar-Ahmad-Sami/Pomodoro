@@ -19,3 +19,4 @@ BANK_EXTEND_MINUTES = 5  # minutes a break is extended by per click
 ASSETS_DIR = Path(__file__).resolve().parent / "assets"
 ICON_PNG = ASSETS_DIR / "icon.png"
 ICON_ICO = ASSETS_DIR / "icon.ico"
+SLACK_ICON_PNG = ASSETS_DIR / "slack-icon.png"  # square logo sized for a Slack app icon

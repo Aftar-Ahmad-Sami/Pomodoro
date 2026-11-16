@@ -128,6 +128,19 @@ def test_failed_post_is_reported_and_not_logged(alerts: SlackAlerts, api: FakeSl
     assert slack.load_posts(alerts.log_path) == []
 
 
+def test_post_future_gives_none_or_the_error(alerts: SlackAlerts, api: FakeSlack) -> None:
+    assert alerts.post("hi").result() is None
+    api.fail_with = "channel_not_found"
+    assert alerts.post("hi").result() == "channel_not_found"
+
+
+def test_delete_all_ignores_age(alerts: SlackAlerts, api: FakeSlack) -> None:
+    alerts.post("just now")
+    alerts.delete_all()
+    assert api.deleted() == ["1700000000.000001"]
+    assert slack.load_posts(alerts.log_path) == []
+
+
 def test_offline_post_is_reported(alerts: SlackAlerts, api: FakeSlack) -> None:
     api.offline = True
     alerts.post("hi")
@@ -180,6 +193,69 @@ def test_config_saved_with_bom_is_read(tmp_path: Path) -> None:
 def test_missing_config_means_not_set_up(tmp_path: Path) -> None:
     assert slack.load_config(tmp_path / "slack.json") is None
     assert slack.connect(tmp_path / "slack.json", tmp_path / "posts.json") is None
+
+
+def test_parse_config_trims_and_defaults() -> None:
+    config = slack.parse_config(" xoxb-123 ", " C0CHY1UC2NN ", " ", "")
+    assert config == SlackConfig("xoxb-123", "C0CHY1UC2NN", None, slack.DEFAULT_DELETE_AFTER_HOURS)
+    assert slack.parse_config("xoxb-1", "C0CHY1UC2NN", "U0123ABC456", "1.5").delete_after_hours == 1.5
+
+
+def test_parse_config_accepts_member_id_as_channel_for_direct_messages() -> None:
+    assert slack.parse_config("xoxb-1", "U0123ABC456").channel == "U0123ABC456"
+
+
+@pytest.mark.parametrize(
+    ("token", "channel", "mention", "hours", "message"),
+    [
+        ("xapp-1-abc", "C0CHY1UC2NN", "", "3", "starts with xoxb-"),
+        ("", "C0CHY1UC2NN", "", "3", "starts with xoxb-"),
+        ("xoxb-1", "general", "", "3", "channel ID"),
+        ("xoxb-1", "#general", "", "3", "channel ID"),
+        ("xoxb-1", "C0CHY1UC2NN", "@sami", "", "member ID"),
+        ("xoxb-1", "C0CHY1UC2NN", "", "soon", "number of hours"),
+        ("xoxb-1", "C0CHY1UC2NN", "", "0", "more than 0"),
+        ("xoxb-1", "C0CHY1UC2NN", "", "-2", "more than 0"),
+    ],
+)
+def test_parse_config_explains_bad_input(token: str, channel: str, mention: str, hours: str, message: str) -> None:
+    with pytest.raises(ValueError, match=message):
+        slack.parse_config(token, channel, mention, hours)
+
+
+def test_save_and_remove_config(tmp_path: Path) -> None:
+    path = tmp_path / "nested" / "slack.json"
+    config = SlackConfig("xoxb-1", "C0CHY1UC2NN", "U0123ABC456", 2.5)
+    slack.save_config(path, config)
+    assert slack.load_config(path) == config
+    assert not path.with_suffix(".tmp").exists()
+    slack.remove_config(path)
+    assert slack.load_config(path) is None
+    slack.remove_config(path)  # removing twice is fine
+
+
+def test_saved_config_without_mention_omits_it(tmp_path: Path) -> None:
+    path = tmp_path / "slack.json"
+    slack.save_config(path, SlackConfig("xoxb-1", "C1"))
+    assert "mention_user_id" not in json.loads(path.read_text(encoding="utf-8"))
+
+
+def test_manifest_asks_only_for_chat_write_and_keeps_token_rotation_off() -> None:
+    assert slack.APP_MANIFEST["oauth_config"]["scopes"]["bot"] == ["chat:write"]
+    assert slack.APP_MANIFEST["settings"]["token_rotation_enabled"] is False
+    assert slack.INVITE_COMMAND.endswith("@" + slack.APP_MANIFEST["features"]["bot_user"]["display_name"])
+
+
+def test_check_message_names_the_deletion_time_and_mentions() -> None:
+    text = slack.check_message(SlackConfig("xoxb-1", "C1", "U42", 1.5))
+    assert text.startswith("<@U42> *Test alert from Pomodoro*")
+    assert "after 1.5h" in text
+
+
+def test_explain_error_has_hints_for_common_setup_mistakes() -> None:
+    assert "/invite @Pomodoro" in slack.explain_error("not_in_channel")
+    assert "token" in slack.explain_error("invalid_auth")
+    assert slack.explain_error("something_new") == "Slack said: something_new"
 
 
 def test_corrupt_post_log_is_treated_as_empty(tmp_path: Path) -> None:

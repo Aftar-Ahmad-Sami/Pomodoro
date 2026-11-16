@@ -1,4 +1,4 @@
-"""Generates src/pomodoro/assets/icon.ico and icon.png, plus docs/slack-icon.png.
+"""Generates src/pomodoro/assets/icon.ico, icon.png and slack-icon.png.
 
 The logo is a split ring: a coral arc for the 52 focus minutes and a
 mint arc for the 17 break minutes. The Slack version fills the whole
@@ -23,7 +23,7 @@ ICO_SIZES = [16, 20, 24, 32, 40, 48, 64, 128, 256]
 SLACK_SIZE = 1024  # Slack accepts 512 to 2000 px
 ROOT = Path(__file__).resolve().parent.parent
 OUT_DIR = ROOT / "src" / "pomodoro" / "assets"
-SLACK_ICON = ROOT / "docs" / "slack-icon.png"
+SLACK_ICON = OUT_DIR / "slack-icon.png"  # bundled so the app's Slack help can save it
 
 
 def lerp(a: RGB, b: RGB, t: float) -> RGB:
@@ -95,7 +95,6 @@ def main() -> None:
         append_images=frames[:-1],
     )
     frames[-1].save(OUT_DIR / "icon.png")
-    SLACK_ICON.parent.mkdir(parents=True, exist_ok=True)
     render(SLACK_SIZE, rounded=False).save(SLACK_ICON)
     print(f"Wrote {OUT_DIR / 'icon.ico'}, {OUT_DIR / 'icon.png'} and {SLACK_ICON}")
 

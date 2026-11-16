@@ -19,7 +19,7 @@ from typing import Literal
 
 from PIL import Image, ImageTk
 
-from pomodoro import render, slack, storage, win32
+from pomodoro import render, slack, slack_dialog, storage, win32
 from pomodoro.bank import TimeBank
 from pomodoro.config import (
     BANK_DAILY_INTEREST,
@@ -76,7 +76,8 @@ TOOLTIP_DELAY_MS = 400
 
 OptionName = Literal["auto_start", "always_on_top", "slack_alerts"]
 # Anything that shows a tooltip on hover: a round button, a switch segment, an option toggle or the extend link
-TooltipTarget = ButtonName | Phase | OptionName | Literal["extend"]
+LinkName = Literal["extend", "slack_settings"]
+TooltipTarget = ButtonName | Phase | OptionName | LinkName
 
 
 def tooltip_text(target: TooltipTarget, timer: PomodoroTimer) -> str:
@@ -103,6 +104,8 @@ def tooltip_text(target: TooltipTarget, timer: PomodoroTimer) -> str:
         return "Keep this window above other windows"
     if target == "slack_alerts":
         return "Also post alerts to Slack, for when you step away"
+    if target == "slack_settings":
+        return "Add or change your Slack token and channel"
     return f"Add {BANK_EXTEND_MINUTES}m from your bank ({format_duration(timer.bank.balance)} left) · E"
 
 
@@ -116,7 +119,8 @@ class PomodoroApp:
         state_path: Path | None = None,
         always_on_top: bool = False,
         slack_alerts: bool = False,
-        slack_connect: Callable[[], slack.SlackAlerts | None] | None = None,
+        slack_config_path: Path | None = None,
+        slack_log_path: Path | None = None,
     ) -> None:
         self.root = root
         self.timer = timer
@@ -125,10 +129,12 @@ class PomodoroApp:
         self.scale = root.winfo_fpixels("1i") / 96
 
         self.always_on_top = always_on_top
-        # Re-run when the toggle is switched on, so Slack can be set up while the app is open
-        self._slack_connect = slack_connect or (lambda: None)
+        # Without a settings path (e.g. in tests) Slack is unavailable and its settings link hidden
+        self.slack_config_path = slack_config_path
+        self.slack_log_path = slack_log_path or slack.default_log_path()
         self.slack = self._slack_connect()
         self.slack_alerts = slack_alerts and self.slack is not None
+        self._slack_window: slack_dialog.SlackSettingsWindow | None = None
         self.hover: ButtonName | None = None
         self.switch_hover: Phase | None = None
         self._flash_text: str | None = None
@@ -187,6 +193,7 @@ class PomodoroApp:
         semibold = pick("Segoe UI Variable Text Semibold", "Segoe UI Semibold")
         text = pick("Segoe UI Variable Text", "Segoe UI")
         self._tooltip_font = (text, 9)
+        self._fonts = slack_dialog.Fonts(text=text, semibold=semibold)
 
         px = self.px
         c = self.canvas = tk.Canvas(
@@ -262,6 +269,20 @@ class PomodoroApp:
             self.toggles[option] = sw
             for item in (sw, lbl):
                 self._bind_option(item, option)
+
+        # Opens the Slack settings window, in the free spot beside the Slack toggle
+        self.slack_settings_text = c.create_text(
+            px(200),
+            px(OPTIONS_Y + OPTIONS_ROW_GAP),
+            text="Slack settings…",
+            font=(text, 10),
+            fill=MUTED,
+            anchor="w",
+            state="normal" if self.slack_config_path else "hidden",
+        )
+        c.tag_bind(self.slack_settings_text, "<Button-1>", lambda e: self._click_button(self.open_slack_settings))
+        c.tag_bind(self.slack_settings_text, "<Enter>", lambda e: self._hover_settings_link(True))
+        c.tag_bind(self.slack_settings_text, "<Leave>", lambda e: self._hover_settings_link(False))
 
         self.root.bind("<space>", lambda e: self.toggle())
         self.root.bind("r", lambda e: self.reset())
@@ -412,7 +433,11 @@ class PomodoroApp:
         self._render_controls()
         self._hover_tooltip(name)
 
-    def _hover_link(self, target: OptionName | Literal["extend"] | None) -> None:
+    def _hover_settings_link(self, inside: bool) -> None:
+        self.canvas.itemconfig(self.slack_settings_text, fill=FG if inside else MUTED)
+        self._hover_link("slack_settings" if inside else None)
+
+    def _hover_link(self, target: OptionName | LinkName | None) -> None:
         """Hover handling for the text-like controls: hand cursor plus tooltip."""
         self.canvas.config(cursor="hand2" if target else "")
         self._hover_tooltip(target)
@@ -440,6 +465,9 @@ class PomodoroApp:
         if target == "extend":
             x, y = c.coords(self.extend_text)
             return x, y + px(24)
+        if target == "slack_settings":
+            x0, _, x1, y1 = c.bbox(self.slack_settings_text)
+            return (x0 + x1) / 2, y1 + px(14)
         if target == "auto_start" or target == "always_on_top" or target == "slack_alerts":
             x, y = c.coords(self.toggles[target])
             return x + px(19), y + px(23)  # the toggle is anchored at its left edge and 38 wide
@@ -520,12 +548,48 @@ class PomodoroApp:
             return
         self.slack = self._slack_connect()  # picks up settings added or changed since launch
         if self.slack is None:
-            self.flash("set up Slack first: see the README")
+            # Not set up yet: switch on once settings are saved
+            self.open_slack_settings(enable_on_save=True)
             return
         self.slack_alerts = True
         hours = f"{self.slack.config.delete_after_hours:g}h"
         self.slack.post(f"Pomodoro alerts are on. Each alert is deleted after {hours}.")
         self.flash("Slack alerts on")
+
+    def _slack_connect(self) -> slack.SlackAlerts | None:
+        if self.slack_config_path is None:
+            return None
+        return slack.connect(self.slack_config_path, self.slack_log_path)
+
+    def open_slack_settings(self, enable_on_save: bool = False) -> None:
+        if self.slack_config_path is None:
+            return
+        if self._slack_window is not None and self._slack_window.alive:
+            self._slack_window.lift()
+            return
+        self._slack_window = slack_dialog.SlackSettingsWindow(
+            self.root,
+            self._fonts,
+            self.scale,
+            self.slack_config_path,
+            self.slack_log_path,
+            on_change=functools.partial(self._slack_settings_changed, enable_on_save),
+        )
+
+    def _slack_settings_changed(self, enable_on_save: bool, config: slack.SlackConfig | None) -> None:
+        if config is None:
+            if self.slack is not None:
+                self.slack.delete_all()  # last chance: the token is gone after this
+            self.slack = None
+            self.slack_alerts = False
+            self.flash("Slack settings removed")
+        elif enable_on_save and not self.slack_alerts:
+            self._flip_slack()  # connects, posts the "alerts are on" message and flashes
+        else:
+            self.slack = self._slack_connect()
+            self.flash("Slack settings saved")
+        self._render_controls()
+        self._save()
 
     def _sweep_slack(self) -> None:
         # Runs even with the toggle off, so alerts from earlier still get deleted
@@ -660,7 +724,8 @@ def main() -> None:
         state_path=state_path,
         always_on_top=state.always_on_top,
         slack_alerts=state.slack_alerts,
-        slack_connect=slack.connect,
+        slack_config_path=slack.default_config_path(),
+        slack_log_path=slack.default_log_path(),
     )
     if interest >= 60:
         app.flash(f"+{format_duration(interest)} interest on your free time")

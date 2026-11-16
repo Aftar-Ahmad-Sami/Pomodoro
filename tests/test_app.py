@@ -64,4 +64,5 @@ def test_option_and_extend_tooltips(timer: PomodoroTimer) -> None:
     assert tooltip_text("auto_start", timer) == "Start the next phase by itself when one ends"
     assert tooltip_text("always_on_top", timer) == "Keep this window above other windows"
     assert tooltip_text("slack_alerts", timer) == "Also post alerts to Slack, for when you step away"
+    assert tooltip_text("slack_settings", timer) == "Add or change your Slack token and channel"
     assert tooltip_text("extend", timer) == "Add 5m from your bank (10m left) · E"

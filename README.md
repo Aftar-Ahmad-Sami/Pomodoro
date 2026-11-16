@@ -86,7 +86,16 @@ Or invest it: unspent time earns **10% interest per day**, compounding, until th
 
 Turn on **Slack alerts** before walking away and every phase change is also posted to a Slack channel. Each alert is deleted from the channel after a few hours (3 by default), so the channel stays clean. Pomodoro checks for expired alerts every 10 minutes while it runs; alerts that expire while it's closed are deleted the next time it starts.
 
-Deleting messages needs a Slack app with a bot token (Slack's simpler incoming webhooks can't delete). One-time setup:
+Deleting messages needs a Slack app with a bot token (Slack's simpler incoming webhooks can't delete). Setting it up takes about 5 minutes, once:
+
+1. Click **Slack settings…** at the bottom of the window (or switch on **Slack alerts**, which opens it when Slack isn't set up yet).
+2. Click **How to set up Slack**. The guide walks through creating the Slack app, with buttons that open the Slack apps page, copy the app manifest and the `/invite @Pomodoro` command, and save the Pomodoro logo for the app icon.
+3. Fill in the bot token and channel ID, click **Send test**, and once the test alert appears in Slack, click **Save**.
+
+The settings window checks what you type and explains Slack errors, e.g. `not_in_channel` means the bot hasn't been invited. Use it later to change the token or channel, or click **Remove** to delete the settings; removing also deletes any alerts still waiting in Slack.
+
+<details>
+<summary>Setting it up by hand instead</summary>
 
 1. Go to [api.slack.com/apps](https://api.slack.com/apps), click **Create New App → Paste a manifest**, pick your workspace and paste this (JSON):
 
@@ -112,7 +121,7 @@ Deleting messages needs a Slack app with a bot token (Slack's simpler incoming w
 
    `chat:write` covers both posting alerts and deleting them. Keep token rotation off: rotated tokens expire after 12 hours.
 
-   To show the Pomodoro logo next to alerts, open **Basic Information → Display Information** and upload [docs/slack-icon.png](docs/slack-icon.png) as the app icon.
+   To show the Pomodoro logo next to alerts, open **Basic Information → Display Information** and upload [slack-icon.png](src/pomodoro/assets/slack-icon.png) as the app icon.
 2. Click **Install to Workspace**, then copy the **Bot User OAuth Token** from **OAuth & Permissions** (starts with `xoxb-`). Some workspaces need an admin to approve the install.
 3. In Slack, open the channel for the alerts and type `/invite @Pomodoro`.
 4. Find the channel ID: click the channel name; it's at the bottom of the **About** tab (starts with `C`).
@@ -130,9 +139,13 @@ Deleting messages needs a Slack app with a bot token (Slack's simpler incoming w
 
    `mention_user_id` and `delete_after_hours` are optional.
 
-Then switch on **Slack alerts**. Pomodoro posts a confirmation to the channel, which is deleted like the other alerts. If something is wrong, the reason appears under the clock (for example `Slack: not_in_channel` means step 3 was skipped). Settings are read each time you switch the toggle on, so there's no need to restart after editing the file.
+Then switch on **Slack alerts**. Settings are read each time you switch the toggle on, so there's no need to restart after editing the file.
 
-The token stays on your PC in that file and is never stored in the repo. Uninstalling Pomodoro removes it, along with the list of alerts still waiting to be deleted.
+</details>
+
+When you switch alerts on, Pomodoro posts a confirmation to the channel, which is deleted like the other alerts. If a post fails, the reason appears under the clock.
+
+The token is stored only on your PC, in `%LOCALAPPDATA%\Pomodoro\slack.json`, and never in the repo. Uninstalling Pomodoro removes it, along with the list of alerts still waiting to be deleted.
 
 ## Troubleshooting
 
@@ -185,6 +198,7 @@ src/pomodoro/
   render.py      Pillow rendering of the ring, buttons, toggles and dots
   notify.py      Chime and Windows toast when a phase ends
   slack.py       Slack alerts and their automatic deletion
+  slack_dialog.py  Slack settings window and setup guide
   win32.py       Windows integration: DPI, title bar, taskbar identity, shortcuts
   installer.py   Per-user installer and uninstaller, built into PomodoroSetup.exe
   formatting.py  User-facing text derived from timer state
